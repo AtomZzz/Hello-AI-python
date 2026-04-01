@@ -1,4 +1,6 @@
 # chat_service.py
+from dashscope import Generation
+
 from ai_app.llm.base_llm_client import BaseLLMClient
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
@@ -9,7 +11,7 @@ import dashscope
 class QwenLLMClient(BaseLLMClient):
     def __init__(self, api_key):
         self.api_key = api_key
-        self.model_name = "qwen3.5-plus"
+        self.model_name = "qwen-plus"
 
     def list_models(self):
         return [self.model_name]
@@ -17,19 +19,25 @@ class QwenLLMClient(BaseLLMClient):
     def generate(self, prompt, model=None):
         from http import HTTPStatus
         import dashscope
+
         dashscope.api_key = self.api_key
+
         messages = [
             {"role": "user", "content": prompt}
         ]
+
         try:
-            response = dashscope.Generation.call(
+            response = Generation.call(
                 model=self.model_name,
-                messages=messages
+                messages=messages,
+                result_format='message'  # ⚠️ 必须加
             )
+
             if response.status_code == HTTPStatus.OK:
                 return response.output.choices[0].message.content
             else:
                 return f"通义千问API错误: {response.status_code} {getattr(response, 'message', '')}"
+
         except Exception as e:
             return f"通义千问请求失败: {e}"
 
