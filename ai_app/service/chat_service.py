@@ -5,6 +5,7 @@ from ai_app.llm.base_llm_client import BaseLLMClient
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
 from ai_app.prompt.templates import build_prompt, DEFAULT_SYSTEM_PROMPT
+from ai_app.parser.json_parser import JsonParser
 import dashscope
 
 # 通义千问专用 LLM Client
@@ -48,6 +49,7 @@ class ChatService:
         self.online_conf = online_conf or {}
         self.llm = self._get_llm_client()
         self.model = model or self._get_default_model()
+        self.json_parser = JsonParser()
 
     def _get_llm_client(self):
         if self.llm_type == "ollama":
@@ -73,4 +75,10 @@ class ChatService:
     def chat(self, user_input, model=None):
         prompt = build_prompt(user_input, self.system_prompt)
         use_model = model or self.model
-        return self.llm.generate(prompt, use_model)
+        raw_reply = self.llm.generate(prompt, use_model)
+        # 尝试解析为JSON
+        json_data = self.json_parser.parse(raw_reply)
+        if json_data:
+            import json
+            return json.dumps(json_data, ensure_ascii=False, indent=2)
+        return raw_reply
