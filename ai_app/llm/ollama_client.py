@@ -1,7 +1,8 @@
 # ollama_client.py
 import requests
+from ai_app.llm.base_llm_client import BaseLLMClient
 
-class OllamaClient:
+class OllamaClient(BaseLLMClient):
     def __init__(self, base_url="http://localhost:11434"):
         self.base_url = base_url.rstrip('/')
 
@@ -42,4 +43,3 @@ class OllamaClient:
             return data.get("response", "无回复")
         except Exception as e:
             return f"请求失败: {e}"
-
