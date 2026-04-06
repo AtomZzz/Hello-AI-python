@@ -10,16 +10,15 @@ class QwenLLMClient(BaseLLMClient):
     def list_models(self):
         return [self.model_name]
 
-    def generate(self, prompt, model=None):
+    def generate(self, messages, model=None):
         from http import HTTPStatus
         import dashscope
         dashscope.api_key = self.api_key
-        messages = [
-            {"role": "user", "content": prompt}
-        ]
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
         try:
             response = Generation.call(
-                model=self.model_name,
+                model=model or self.model_name,
                 messages=messages,
                 result_format='message'  # ⚠️ 必须加
             )

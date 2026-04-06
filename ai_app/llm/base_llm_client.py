@@ -7,6 +7,6 @@ class BaseLLMClient(ABC):
         pass
 
     @abstractmethod
-    def generate(self, prompt, model):
+    def generate(self, messages, model):
         pass
 

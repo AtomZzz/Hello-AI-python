@@ -12,19 +12,26 @@ class OnlineLLMClient(BaseLLMClient):
         # return ["online-model-1", "online-model-2"]
         return ["online-model"]
 
-    def generate(self, prompt, model):
+    def generate(self, messages, model):
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        payload = {
-            "model": model,
-            "prompt": prompt
-        }
         try:
-            resp = requests.post(f"{self.api_url}/generate", json=payload, headers=headers)
+            if isinstance(messages, str):
+                payload = {"model": model, "prompt": messages}
+                resp = requests.post(f"{self.api_url}/generate", json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("response", "无回复")
+
+            # Compatible with OpenAI-style chat completion endpoints.
+            payload = {"model": model, "messages": messages}
+            resp = requests.post(f"{self.api_url}/chat/completions", json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            # 假设返回格式为 {"response": "..."}
+            choices = data.get("choices", [])
+            if choices:
+                return choices[0].get("message", {}).get("content", "无回复")
             return data.get("response", "无回复")
         except Exception as e:
             return f"线上模型请求失败: {e}"

@@ -1,15 +1,12 @@
 # chat_service.py
-from dashscope import Generation
+import json
 
-from ai_app.llm.base_llm_client import BaseLLMClient
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
 from ai_app.llm.qwen_client import QwenLLMClient
-from ai_app.prompt.templates import build_prompt, DEFAULT_SYSTEM_PROMPT
+from ai_app.prompt.templates import build_messages, DEFAULT_SYSTEM_PROMPT
 from ai_app.parser.json_parser import JsonParser
-import dashscope
 
-# 通义千问专用 LLM Client
 class ChatService:
     def __init__(self, model=None, system_prompt=DEFAULT_SYSTEM_PROMPT, llm_type="ollama", online_conf=None):
         self.system_prompt = system_prompt
@@ -40,13 +37,33 @@ class ChatService:
             raise RuntimeError("未检测到可用模型，请检查配置。")
         return models[0]
 
+    def _is_dev_request(self, user_input):
+        text = (user_input or "").lower()
+        keywords = [
+            "代码", "示例", "实现", "开发", "接口", "类", "函数", "重构", "优化", "修复",
+            "python", "java", "spring", "sql", "api", "bug", "hello"
+        ]
+        return any(k in text for k in keywords)
+
+    def _build_dev_fallback_json(self, raw_reply):
+        return {
+            "desc": "模型未按JSON格式返回，已自动进行兜底封装",
+            "code": raw_reply.strip(),
+            "note": "建议保留system role约束并继续优化提示词。"
+        }
+
     def chat(self, user_input, model=None):
-        prompt = build_prompt(user_input, self.system_prompt)
+        is_dev_request = self._is_dev_request(user_input)
+        messages = build_messages(user_input, self.system_prompt, require_json=is_dev_request)
         use_model = model or self.model
-        raw_reply = self.llm.generate(prompt, use_model)
-        # 尝试解析为JSON
-        json_data = self.json_parser.parse(raw_reply)
-        if json_data:
-            import json
+        raw_reply = self.llm.generate(messages, use_model)
+
+        # 开发类请求优先保证稳定的JSON输出
+        if is_dev_request:
+            json_data = self.json_parser.parse(raw_reply)
+            if not json_data:
+                json_data = self._build_dev_fallback_json(raw_reply)
             return json.dumps(json_data, ensure_ascii=False, indent=2)
+
+        # 非开发请求保持自然文本输出
         return raw_reply

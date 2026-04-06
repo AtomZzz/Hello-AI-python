@@ -14,8 +14,9 @@ class JsonParser:
         :param text: 大模型原始输出
         :return: 解析后的 dict 或 None
         """
-        # 1. 提取 JSON 代码块
-        json_str = self._extract_json(text)
+        # 1. 先剥离 Markdown 代码围栏，再提取 JSON
+        clean_text = self._strip_code_fences(text)
+        json_str = self._extract_json(clean_text)
         if not json_str:
             return None
         # 2. 尝试解析
@@ -28,10 +29,18 @@ class JsonParser:
                 data = json.loads(json_str)
             except Exception:
                 return None
-        # 3. 校验结构
+        # 3. 结构归一化 + 校验
+        data = self._normalize(data)
         if not self._validate(data):
             return None
         return data
+
+    def _strip_code_fences(self, text: str) -> str:
+        import re
+        # 允许 ```json ...``` / ```python ...``` / ```...```
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text.strip())
+        text = re.sub(r"\s*```$", "", text.strip())
+        return text
 
     def _extract_json(self, text: str) -> Optional[str]:
         """
@@ -68,4 +77,15 @@ class JsonParser:
             if key not in data:
                 return False
         return True
+
+    def _normalize(self, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        for key in self.required_keys:
+            if key not in normalized:
+                normalized[key] = ""
+            elif normalized[key] is None:
+                normalized[key] = ""
+        return normalized
 
