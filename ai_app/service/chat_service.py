@@ -1,11 +1,18 @@
 # chat_service.py
 import json
+import logging
+import time
+import uuid
 
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
 from ai_app.llm.qwen_client import QwenLLMClient
 from ai_app.prompt.templates import build_messages, DEFAULT_SYSTEM_PROMPT
 from ai_app.parser.json_parser import JsonParser
+
+
+logger = logging.getLogger(__name__)
+
 
 class ChatService:
     def __init__(self, model=None, system_prompt=DEFAULT_SYSTEM_PROMPT, llm_type="ollama", online_conf=None):
@@ -17,16 +24,21 @@ class ChatService:
         self.json_parser = JsonParser()
 
     def _get_llm_client(self):
+        timeout = self.online_conf.get("timeout", 60)
         if self.llm_type == "ollama":
-            return OllamaClient()
+            return OllamaClient(timeout=timeout)
         elif self.llm_type == "online":
             return OnlineLLMClient(
                 api_url=self.online_conf.get("api_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-                api_key=self.online_conf.get("api_key")
+                api_key=self.online_conf.get("api_key"),
+                timeout=timeout,
             )
         elif self.llm_type == "qwen":
             return QwenLLMClient(
-                api_key=self.online_conf.get("api_key")
+                api_key=self.online_conf.get("api_key"),
+                base_url=self.online_conf.get("api_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+                model_name=self.online_conf.get("model_name", "qwen-plus"),
+                timeout=timeout,
             )
         else:
             raise ValueError(f"不支持的llm_type: {self.llm_type}")
@@ -53,17 +65,32 @@ class ChatService:
         }
 
     def chat(self, user_input, model=None):
+        request_id = str(uuid.uuid4())[:8]
+        start = time.perf_counter()
         is_dev_request = self._is_dev_request(user_input)
         messages = build_messages(user_input, self.system_prompt, require_json=is_dev_request)
         use_model = model or self.model
+        logger.info(
+            "Chat start request_id=%s llm_type=%s model=%s dev_mode=%s",
+            request_id,
+            self.llm_type,
+            use_model,
+            is_dev_request,
+        )
         raw_reply = self.llm.generate(messages, use_model)
 
         # 开发类请求优先保证稳定的JSON输出
         if is_dev_request:
             json_data = self.json_parser.parse(raw_reply)
             if not json_data:
+                logger.warning("JSON parse failed request_id=%s, using fallback wrapper", request_id)
                 json_data = self._build_dev_fallback_json(raw_reply)
-            return json.dumps(json_data, ensure_ascii=False, indent=2)
+            output = json.dumps(json_data, ensure_ascii=False, indent=2)
+            elapsed = time.perf_counter() - start
+            logger.info("Chat done request_id=%s elapsed=%.2fs", request_id, elapsed)
+            return output
 
         # 非开发请求保持自然文本输出
+        elapsed = time.perf_counter() - start
+        logger.info("Chat done request_id=%s elapsed=%.2fs", request_id, elapsed)
         return raw_reply
