@@ -1,2 +1,5 @@
 requests
-
+python-dotenv
+dashscope
+sentence-transformers
+faiss-cpu

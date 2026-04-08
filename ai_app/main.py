@@ -1,8 +1,19 @@
 # main.py
 from ai_app.service.chat_service import ChatService
 from dotenv import load_dotenv
+import importlib.util
 import logging
 import os
+import sys
+
+
+def check_rag_dependencies():
+    checks = {
+        "sentence_transformers": importlib.util.find_spec("sentence_transformers") is not None,
+        "faiss": importlib.util.find_spec("faiss") is not None,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    return len(missing) == 0, missing
 
 if __name__ == '__main__':
     load_dotenv()
@@ -11,6 +22,14 @@ if __name__ == '__main__':
     #     level=getattr(logging, log_level, logging.INFO),
     #     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     # )
+
+    print(f"[ENV] Python executable: {sys.executable}")
+    rag_ok, rag_missing = check_rag_dependencies()
+    if rag_ok:
+        print("[RAG-CHECK] 依赖检查通过: sentence_transformers, faiss")
+    else:
+        print(f"[RAG-CHECK] 缺少依赖: {', '.join(rag_missing)}")
+        print("[RAG-CHECK] 将自动降级为普通LLM流程(不使用RAG检索)。")
 
     llm_type = os.getenv("LLM_TYPE", "ollama")
     timeout = int(os.getenv("LLM_TIMEOUT", "60"))
