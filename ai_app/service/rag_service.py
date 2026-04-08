@@ -39,7 +39,10 @@ class RagService:
             [f"[{idx + 1}] score={hit['score']:.4f} | {hit['text']}" for idx, hit in enumerate(hits)]
         )
         augmented_input = (
-            "请优先基于以下内部资料回答；如果资料不足，请明确说明并再做合理补充。\n\n"
+            "你必须严格基于以下资料回答：\n"
+            "- 不允许编造\n"
+            "- 如果资料不足，必须回答\"资料中未提及\"\n"
+            "- 不要补充外部事实\n\n"
             f"内部资料:\n{context}\n\n"
             f"用户问题:\n{user_input}"
         )

@@ -1,15 +1,7 @@
+import hashlib
 import os
-from typing import Any, Dict, List
-
-try:
-	import faiss
-except ImportError:  # pragma: no cover
-	faiss = None
-
-try:
-	from sentence_transformers import SentenceTransformer
-except ImportError:  # pragma: no cover
-	SentenceTransformer = None
+import pickle
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class SimpleVectorStore:
@@ -19,48 +11,92 @@ class SimpleVectorStore:
 		self,
 		knowledge_path: str,
 		model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+		cache_path: Optional[str] = None,
 	):
 		self.knowledge_path = knowledge_path
 		self.model_name = model_name
+		self.cache_path = cache_path or os.path.join(os.path.dirname(knowledge_path), "embeddings.pkl")
 		self.embedding_model = None
 		self.documents: List[str] = []
 		self.index = None
+		self._faiss = None
 
-	def _load_documents(self) -> List[str]:
+	def _read_knowledge(self) -> str:
 		if not os.path.exists(self.knowledge_path):
-			return []
-
+			return ""
 		with open(self.knowledge_path, "r", encoding="utf-8") as f:
-			raw = f.read().strip()
+			return f.read().strip()
 
+	def _split_documents(self, raw: str) -> List[str]:
 		if not raw:
 			return []
-
 		# Prefer paragraph split; fallback to line split when no blank line exists.
 		chunks = [c.strip() for c in raw.split("\n\n") if c.strip()]
 		if len(chunks) <= 1:
 			chunks = [line.strip() for line in raw.splitlines() if line.strip()]
 		return chunks
 
+	def _build_fingerprint(self, raw: str) -> str:
+		content = f"{self.model_name}\n{raw}".encode("utf-8")
+		return hashlib.sha256(content).hexdigest()
+
+	def _load_cache(self, fingerprint: str) -> Optional[Tuple[List[str], Any]]:
+		if not os.path.exists(self.cache_path):
+			return None
+		try:
+			with open(self.cache_path, "rb") as f:
+				payload = pickle.load(f)
+		except Exception:
+			return None
+		if payload.get("fingerprint") != fingerprint:
+			return None
+		documents = payload.get("documents") or []
+		embeddings = payload.get("embeddings")
+		if not documents or embeddings is None:
+			return None
+		return documents, embeddings
+
+	def _save_cache(self, fingerprint: str, documents: List[str], embeddings: Any) -> None:
+		payload = {
+			"fingerprint": fingerprint,
+			"documents": documents,
+			"embeddings": embeddings,
+		}
+		with open(self.cache_path, "wb") as f:
+			pickle.dump(payload, f)
+
 	def load(self) -> None:
-		self.documents = self._load_documents()
+		raw = self._read_knowledge()
+		self.documents = self._split_documents(raw)
 		if not self.documents:
 			return
 
-		if faiss is None or SentenceTransformer is None:
-			raise RuntimeError(
-				"缺少 RAG 依赖，请安装 sentence-transformers 和 faiss-cpu。"
-			)
+		# Lazy import to avoid heavy startup cost when RAG route is not used.
+		try:
+			import faiss
+			from sentence_transformers import SentenceTransformer
+		except ImportError as e:  # pragma: no cover
+			raise RuntimeError("缺少 RAG 依赖，请安装 sentence-transformers 和 faiss-cpu。") from e
 
-		self.embedding_model = SentenceTransformer(self.model_name)
-		embeddings = self.embedding_model.encode(
-			self.documents,
-			convert_to_numpy=True,
-			normalize_embeddings=True,
-		).astype("float32")
+		self._faiss = faiss
+		fingerprint = self._build_fingerprint(raw)
+		cached = self._load_cache(fingerprint)
+		if cached:
+			self.documents, embeddings = cached
+		else:
+			self.embedding_model = SentenceTransformer(self.model_name)
+			embeddings = self.embedding_model.encode(
+				self.documents,
+				convert_to_numpy=True,
+				normalize_embeddings=True,
+			).astype("float32")
+			self._save_cache(fingerprint, self.documents, embeddings)
+
+		if self.embedding_model is None:
+			self.embedding_model = SentenceTransformer(self.model_name)
 
 		dim = embeddings.shape[1]
-		self.index = faiss.IndexFlatIP(dim)
+		self.index = self._faiss.IndexFlatIP(dim)
 		self.index.add(embeddings)
 
 	def _ensure_loaded(self) -> None:
