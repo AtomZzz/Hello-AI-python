@@ -14,10 +14,17 @@ ROUTER_SYSTEM_INSTRUCTION_TEMPLATE = """
 }}
 
 判定规则：
-1. 当问题可能依赖内部资料、个人档案、公司知识库、指定文档事实时，use_rag=true。
-2. 当问题是开发实现、代码示例、架构设计、接口定义、重构优化等技术任务时，require_json=true。
-3. 其余问题默认 false。
-4. 只能输出JSON，不要输出任何额外文字。
+1. 请基于语义进行判断，不要依赖固定关键词匹配。
+2. 当问题可能依赖内部资料、个人档案、公司知识库、指定文档事实时，use_rag=true。
+3. 当问题是开发实现、代码示例、脚本编写、架构设计、接口定义、重构优化、调试修复等技术任务时，require_json=true。
+4. 普通聊天、自我介绍、开放问答、非技术闲聊通常 require_json=false。
+5. 如果一个问题既涉及内部资料又需要结构化输出，则 use_rag=true 且 require_json=true。
+6. 只能输出JSON，不要输出任何额外文字。
+
+示例：
+- "Atom是谁" -> {"use_rag": true, "require_json": true, "reason": "需要基于内部资料回答"}
+- "写一个hello world" -> {"use_rag": false, "require_json": true, "reason": "明显是代码生成需求"}
+- "介绍一下你自己" -> {"use_rag": false, "require_json": false, "reason": "普通问答"}
 """
 
 DEV_SYSTEM_INSTRUCTION_TEMPLATE = """

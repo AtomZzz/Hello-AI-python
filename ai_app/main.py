@@ -15,41 +15,71 @@ def check_rag_dependencies():
     missing = [name for name, ok in checks.items() if not ok]
     return len(missing) == 0, missing
 
+
+def parse_bool(value, default=True):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
 if __name__ == '__main__':
     load_dotenv()
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    # logging.basicConfig(
-    #     level=getattr(logging, log_level, logging.INFO),
-    #     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    # )
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
 
     print(f"[ENV] Python executable: {sys.executable}")
-    rag_ok, rag_missing = check_rag_dependencies()
-    if rag_ok:
-        print("[RAG-CHECK] 依赖检查通过: sentence_transformers, faiss")
+    rag_enabled = parse_bool(os.getenv("RAG_ENABLED", "1"), default=True)
+    routing_mode = os.getenv("ROUTING_MODE", "hybrid").strip().lower()
+    print(f"[ROUTER] ROUTING_MODE={routing_mode}")
+
+    if rag_enabled:
+        rag_ok, rag_missing = check_rag_dependencies()
+        if rag_ok:
+            print("[RAG-CHECK] 依赖检查通过: sentence_transformers, faiss")
+        else:
+            print(f"[RAG-CHECK] 缺少依赖: {', '.join(rag_missing)}")
+            print("[RAG-CHECK] 将自动降级为普通LLM流程(不使用RAG检索)。")
     else:
-        print(f"[RAG-CHECK] 缺少依赖: {', '.join(rag_missing)}")
-        print("[RAG-CHECK] 将自动降级为普通LLM流程(不使用RAG检索)。")
+        print("[RAG-CHECK] RAG_ENABLED=0，已禁用RAG初始化。")
 
     llm_type = os.getenv("LLM_TYPE", "ollama")
     timeout = int(os.getenv("LLM_TIMEOUT", "60"))
+    model_name = None
+    router_model = os.getenv("ROUTER_MODEL")
     online_conf = None
     if llm_type == "qwen":
+        model_name = os.getenv("QWEN_MODEL", "qwen-plus")
         online_conf = {
             "api_key": os.getenv("QWEN_API_KEY"),
             "api_url": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            "model_name": os.getenv("QWEN_MODEL", "qwen-plus"),
+            "model_name": model_name,
             "timeout": timeout,
         }
     elif llm_type == "online":
+        model_name = os.getenv("ONLINE_MODEL", "online-model")
         online_conf = {
             "api_key": os.getenv("ONLINE_API_KEY"),
             "api_url": os.getenv("ONLINE_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "model_name": model_name,
             "timeout": timeout,
         }
 
+    if not router_model:
+        router_model = model_name
+    if router_model:
+        print(f"[ROUTER] ROUTER_MODEL={router_model}")
+
     try:
-        chat_service = ChatService(llm_type=llm_type, online_conf=online_conf)
+        chat_service = ChatService(
+            model=model_name,
+            router_model=router_model,
+            llm_type=llm_type,
+            online_conf=online_conf,
+            rag_enabled=rag_enabled,
+            routing_mode=routing_mode,
+        )
     except RuntimeError as e:
         print(str(e))
         exit(1)
@@ -59,4 +89,13 @@ if __name__ == '__main__':
         if user_input.lower() in ("exit", "quit", "q"):
             print("退出程序。"); break
         reply = chat_service.chat(user_input)
+        route = chat_service.last_route or {}
+        print(
+            "[ROUTER] "
+            f"source={route.get('source', 'unknown')} "
+            f"router_model={route.get('router_model', chat_service.last_router_model)} "
+            f"use_rag={route.get('use_rag')} "
+            f"require_json={route.get('require_json')} "
+            f"reason={route.get('reason', '')}"
+        )
         print(f"AI: {reply}")

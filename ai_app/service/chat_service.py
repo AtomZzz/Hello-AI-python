@@ -23,20 +23,28 @@ class ChatService:
     def __init__(
         self,
         model=None,
+        router_model=None,
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         llm_type="ollama",
         online_conf=None,
         rag_enabled=True,
+        routing_mode="hybrid",
     ):
         self.system_prompt = system_prompt
         self.llm_type = llm_type
         self.online_conf = online_conf or {}
         self.rag_enabled = rag_enabled
+        self.routing_mode = (routing_mode or "hybrid").strip().lower()
+        if self.routing_mode not in ("ai_only", "hybrid", "rule_only"):
+            raise ValueError(f"不支持的routing_mode: {self.routing_mode}")
         self.llm = self._get_llm_client()
         self.model = model or self._get_default_model()
+        self.router_model = router_model or self.model
         self.json_parser = JsonParser()
         self.route_parser = JsonParser(required_keys=["use_rag", "require_json", "reason"])
         self.rag_service = None
+        self.last_route = None
+        self.last_router_model = self.router_model
 
     def _get_rag_service(self):
         if not self.rag_enabled:
@@ -77,7 +85,9 @@ class ChatService:
         text = (user_input or "").lower()
         keywords = [
             "代码", "示例", "实现", "开发", "接口", "类", "函数", "重构", "优化", "修复",
-            "python", "java", "spring", "sql", "api", "bug", "hello"
+            "python", "java", "spring", "sql", "api", "bug", "hello",
+            "hello world", "demo", "脚本", "程序", "编程", "写一个", "写一段", "生成代码",
+            "sample", "example", "code", "method", "class", "write"
         ]
         return any(k in text for k in keywords)
 
@@ -85,6 +95,14 @@ class ChatService:
         text = (user_input or "").lower()
         keywords = ["atom", "深圳", "邮箱", "网名", "内部资料", "个人信息", "联系方式", "email"]
         return any(k in text for k in keywords)
+
+    def _build_rule_route(self, user_input):
+        return {
+            "use_rag": self._looks_like_rag_request(user_input),
+            "require_json": self._is_dev_request(user_input),
+            "reason": "rule-router",
+            "source": "rule",
+        }
 
     @staticmethod
     def _to_bool(value):
@@ -94,23 +112,38 @@ class ChatService:
             return value.strip().lower() in ("1", "true", "yes", "on")
         return False
 
-    def _route_request(self, user_input, use_model):
-        route = {
-            "use_rag": self._looks_like_rag_request(user_input),
-            "require_json": self._is_dev_request(user_input),
-            "reason": "heuristic-fallback",
-        }
-
+    def _build_ai_route(self, user_input, use_model):
         try:
             router_messages = build_router_messages(user_input)
             raw_route = self.llm.generate(router_messages, use_model)
             parsed = self.route_parser.parse(raw_route)
             if parsed:
-                route["use_rag"] = self._to_bool(parsed.get("use_rag"))
-                route["require_json"] = self._to_bool(parsed.get("require_json"))
-                route["reason"] = parsed.get("reason") or "ai-router"
+                return {
+                    "use_rag": self._to_bool(parsed.get("use_rag")),
+                    "require_json": self._to_bool(parsed.get("require_json")),
+                    "reason": parsed.get("reason") or "ai-router",
+                    "source": "ai",
+                }
         except Exception as e:
             logger.warning("AI router failed, fallback to heuristic: %s", e)
+
+        return None
+
+    def _route_request(self, user_input, use_model):
+        rule_route = self._build_rule_route(user_input)
+        ai_route = self._build_ai_route(user_input, use_model)
+
+        if self.routing_mode == "rule_only":
+            route = rule_route
+        elif self.routing_mode == "ai_only":
+            route = ai_route or {
+                "use_rag": False,
+                "require_json": False,
+                "reason": "ai-router-unavailable",
+                "source": "ai-fallback-empty",
+            }
+        else:
+            route = ai_route or rule_route
 
         if not self.rag_enabled:
             route["use_rag"] = False
@@ -144,10 +177,17 @@ class ChatService:
         request_id = str(uuid.uuid4())[:8]
         start = time.perf_counter()
         use_model = model or self.model
-        route = self._route_request(user_input, use_model)
+        route_model = self.router_model or use_model
+        route = self._route_request(user_input, route_model)
+        route["router_model"] = route_model
+        self.last_route = route
+        self.last_router_model = route_model
         logger.info(
-            "Route decided request_id=%s use_rag=%s require_json=%s reason=%s",
+            "Route decided request_id=%s mode=%s source=%s router_model=%s use_rag=%s require_json=%s reason=%s",
             request_id,
+            self.routing_mode,
+            route.get("source", "unknown"),
+            route_model,
             route["use_rag"],
             route["require_json"],
             route.get("reason", ""),
