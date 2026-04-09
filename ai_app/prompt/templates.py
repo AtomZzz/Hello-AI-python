@@ -8,6 +8,7 @@ DEFAULT_SYSTEM_PROMPT = (
 ROUTER_SYSTEM_INSTRUCTION_TEMPLATE = """
 你是请求路由器。请分析用户问题并严格返回一个JSON对象：
 {{
+  "use_agent": true/false,
   "use_rag": true/false,
   "require_json": true/false,
   "reason": "简短原因"
@@ -15,16 +16,18 @@ ROUTER_SYSTEM_INSTRUCTION_TEMPLATE = """
 
 判定规则：
 1. 请基于语义进行判断，不要依赖固定关键词匹配。
-2. 当问题可能依赖内部资料、个人档案、公司知识库、指定文档事实时，use_rag=true。
-3. 当问题是开发实现、代码示例、脚本编写、架构设计、接口定义、重构优化、调试修复等技术任务时，require_json=true。
-4. 普通聊天、自我介绍、开放问答、非技术闲聊通常 require_json=false。
-5. 如果一个问题既涉及内部资料又需要结构化输出，则 use_rag=true 且 require_json=true。
-6. 只能输出JSON，不要输出任何额外文字。
+2. 当问题是日志分析、错误定位、异常排查、堆栈解读等需要工具执行的任务时，use_agent=true。
+3. 当问题可能依赖内部资料、个人档案、公司知识库、指定文档事实时，use_rag=true。
+4. 当问题是开发实现、代码示例、脚本编写、架构设计、接口定义、重构优化、调试修复等技术任务时，require_json=true。
+5. 普通聊天、自我介绍、开放问答、非技术闲聊通常 require_json=false。
+6. 当 use_agent=true 时，use_rag=false（优先走 Agent 工具链）。
+7. 只能输出JSON，不要输出任何额外文字。
 
 示例：
-- "Atom是谁" -> {"use_rag": true, "require_json": true, "reason": "需要基于内部资料回答"}
-- "写一个hello world" -> {"use_rag": false, "require_json": true, "reason": "明显是代码生成需求"}
-- "介绍一下你自己" -> {"use_rag": false, "require_json": false, "reason": "普通问答"}
+- "帮我分析这段报错日志" -> {"use_agent": true, "use_rag": false, "require_json": true, "reason": "日志分析适合Agent工具链"}
+- "Atom是谁" -> {"use_agent": false, "use_rag": true, "require_json": true, "reason": "需要基于内部资料回答"}
+- "写一个hello world" -> {"use_agent": false, "use_rag": false, "require_json": true, "reason": "明显是代码生成需求"}
+- "介绍一下你自己" -> {"use_agent": false, "use_rag": false, "require_json": false, "reason": "普通问答"}
 """
 
 DEV_SYSTEM_INSTRUCTION_TEMPLATE = """
@@ -52,6 +55,34 @@ JSON_REPAIR_SYSTEM_INSTRUCTION_TEMPLATE = """
 必须包含字段: {required_keys}
 不要输出 Markdown 代码块，不要输出JSON之外的内容。
 """
+
+
+def build_agent_prompt(user_input, tool_specs=None):
+    tool_specs = tool_specs or [
+        "a. analyze_log(text) - 分析日志",
+        "b. summarize_text(text) - 文本总结",
+    ]
+    tools_section = "\n".join(tool_specs)
+    return f"""
+你是一个AI Agent，可以使用以下工具：
+
+{tools_section}
+
+请按如下格式思考：
+
+Thought: 你要做什么
+Action: 工具名
+Action Input: 输入
+Observation: 工具返回结果
+Final Answer: 最终答案
+
+用户问题：
+{user_input}
+"""
+
+
+def build_agent_messages(user_input, tool_specs=None):
+    return [{"role": "user", "content": build_agent_prompt(user_input, tool_specs=tool_specs).strip()}]
 
 
 def build_messages(user_input, system_prompt=DEFAULT_SYSTEM_PROMPT, require_json=False):

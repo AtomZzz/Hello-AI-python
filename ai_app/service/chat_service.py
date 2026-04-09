@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 
+from ai_app.agent.executor import AgentExecutor
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
 from ai_app.llm.qwen_client import QwenLLMClient
@@ -29,11 +30,13 @@ class ChatService:
         online_conf=None,
         rag_enabled=True,
         routing_mode="hybrid",
+        agent_enabled=True,
     ):
         self.system_prompt = system_prompt
         self.llm_type = llm_type
         self.online_conf = online_conf or {}
         self.rag_enabled = rag_enabled
+        self.agent_enabled = agent_enabled
         self.routing_mode = (routing_mode or "hybrid").strip().lower()
         if self.routing_mode not in ("ai_only", "hybrid", "rule_only"):
             raise ValueError(f"不支持的routing_mode: {self.routing_mode}")
@@ -41,10 +44,18 @@ class ChatService:
         self.model = model or self._get_default_model()
         self.router_model = router_model or self.model
         self.json_parser = JsonParser()
-        self.route_parser = JsonParser(required_keys=["use_rag", "require_json", "reason"])
+        self.route_parser = JsonParser(required_keys=["use_agent", "use_rag", "require_json", "reason"])
         self.rag_service = None
+        self.agent_executor = None
         self.last_route = None
         self.last_router_model = self.router_model
+
+    def _get_agent_executor(self):
+        if not self.agent_enabled:
+            return None
+        if self.agent_executor is None:
+            self.agent_executor = AgentExecutor(self.llm, self.model)
+        return self.agent_executor
 
     def _get_rag_service(self):
         if not self.rag_enabled:
@@ -97,7 +108,10 @@ class ChatService:
         return any(k in text for k in keywords)
 
     def _build_rule_route(self, user_input):
+        agent_executor = self._get_agent_executor()
+        use_agent = bool(agent_executor and agent_executor.can_handle(user_input))
         return {
+            "use_agent": use_agent,
             "use_rag": self._looks_like_rag_request(user_input),
             "require_json": self._is_dev_request(user_input),
             "reason": "rule-router",
@@ -119,6 +133,7 @@ class ChatService:
             parsed = self.route_parser.parse(raw_route)
             if parsed:
                 return {
+                    "use_agent": self._to_bool(parsed.get("use_agent")),
                     "use_rag": self._to_bool(parsed.get("use_rag")),
                     "require_json": self._to_bool(parsed.get("require_json")),
                     "reason": parsed.get("reason") or "ai-router",
@@ -137,6 +152,7 @@ class ChatService:
             route = rule_route
         elif self.routing_mode == "ai_only":
             route = ai_route or {
+                "use_agent": False,
                 "use_rag": False,
                 "require_json": False,
                 "reason": "ai-router-unavailable",
@@ -145,11 +161,17 @@ class ChatService:
         else:
             route = ai_route or rule_route
 
+        if not self.agent_enabled:
+            route["use_agent"] = False
+
         if not self.rag_enabled:
             route["use_rag"] = False
 
+        if route["use_agent"]:
+            route["use_rag"] = False
+
         # RAG answers should also be JSON-controlled.
-        if route["use_rag"]:
+        if route["use_rag"] or route["use_agent"]:
             route["require_json"] = True
         return route
 
@@ -183,15 +205,30 @@ class ChatService:
         self.last_route = route
         self.last_router_model = route_model
         logger.info(
-            "Route decided request_id=%s mode=%s source=%s router_model=%s use_rag=%s require_json=%s reason=%s",
+            "Route decided request_id=%s mode=%s source=%s router_model=%s use_agent=%s use_rag=%s require_json=%s reason=%s",
             request_id,
             self.routing_mode,
             route.get("source", "unknown"),
             route_model,
+            route["use_agent"],
             route["use_rag"],
             route["require_json"],
             route.get("reason", ""),
         )
+
+        if route["use_agent"]:
+            agent_executor = self._get_agent_executor()
+            if not agent_executor:
+                logger.warning("Agent route requested but executor unavailable, fallback to direct LLM")
+            else:
+                try:
+                    logger.info("Agent route enabled request_id=%s model=%s", request_id, use_model)
+                    output = agent_executor.run(user_input, use_model)
+                    elapsed = time.perf_counter() - start
+                    logger.info("Agent done request_id=%s elapsed=%.2fs", request_id, elapsed)
+                    return output
+                except Exception as e:
+                    logger.warning("Agent execution failed request_id=%s error=%s", request_id, e)
 
         input_for_llm = user_input
         if route["use_rag"]:
