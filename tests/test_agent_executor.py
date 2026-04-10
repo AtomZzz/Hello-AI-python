@@ -6,10 +6,46 @@ from ai_app.agent.executor import AgentExecutor
 
 class FakeLLM:
     def generate(self, messages, model):
+        system_text = ""
+        if messages and isinstance(messages, list):
+            system_text = messages[0].get("content", "")
+
+        if "你是企业级日志诊断专家" in system_text:
+            return json.dumps(
+                {
+                    "overview": "检测到数据库事务与锁竞争异常，属于高优先级故障。",
+                    "severity": "P2",
+                    "root_cause": ["存在死锁竞争"],
+                    "key_evidence": ["Deadlock found when trying to get lock"],
+                    "next_actions": ["缩短事务并增加重试。"],
+                    "confidence": "high",
+                },
+                ensure_ascii=False,
+            )
+
         return (
             "Thought: 我先分析日志\n"
             "Action: analyze_log\n"
-            "Action Input: 2026-04-09 ERROR timeout\n"
+            "Action Input: 2024-04-09 10:00:10 [ERROR] Deadlock found when trying to get lock; try restarting transaction\n"
+            "Observation: ...\n"
+            "Final Answer: done"
+        )
+
+
+class FakeInvalidSummaryLLM:
+    def generate(self, messages, model):
+        system_text = ""
+        if messages and isinstance(messages, list):
+            system_text = messages[0].get("content", "")
+
+        if "你是企业级日志诊断专家" in system_text:
+            return "not-json"
+        if "你是JSON修复器" in system_text:
+            return "still-not-json"
+        return (
+            "Thought: 我先分析日志\n"
+            "Action: analyze_log\n"
+            "Action Input: 2024-04-09 10:00:15 [ERROR] Connection timeout: Too many connections (max_connections: 151)\n"
             "Observation: ...\n"
             "Final Answer: done"
         )
@@ -39,7 +75,18 @@ class AgentExecutorTest(unittest.TestCase):
         self.assertEqual(data["task_type"], "日志分析")
         self.assertIn("analysis", data)
         self.assertIn("summary", data)
-        self.assertNotIn('{"line_count"', data["summary"])
+        self.assertIn("root_cause", data)
+        self.assertIn("存在死锁竞争", data["root_cause"])
+        self.assertEqual(data["summary"]["severity"], "P2")
+        self.assertFalse(data["summary"]["fallback_used"])
+
+    def test_run_falls_back_when_ai_summary_invalid(self):
+        executor = AgentExecutor(FakeInvalidSummaryLLM(), "fake-model")
+        output = executor.run("日志里有error", model="fake-model")
+        data = json.loads(output)
+        self.assertTrue(data["summary"]["fallback_used"])
+        self.assertIn("数据库连接数不足（max_connections）", data["root_cause"])
+        self.assertIn("overview", data["summary"])
 
     def test_register_tool_and_execute(self):
         executor = AgentExecutor(FakeCustomToolLLM(), "fake-model")

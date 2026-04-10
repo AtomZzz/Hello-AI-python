@@ -56,6 +56,27 @@ JSON_REPAIR_SYSTEM_INSTRUCTION_TEMPLATE = """
 不要输出 Markdown 代码块，不要输出JSON之外的内容。
 """
 
+LOG_SUMMARY_SYSTEM_INSTRUCTION_TEMPLATE = """
+你是企业级日志诊断专家。请基于用户提供的原始日志与规则分析结果，输出一个稳定的JSON对象。
+
+必须严格返回如下结构，且只能返回JSON：
+{{
+  "overview": "整体诊断结论",
+  "severity": "P1|P2|P3|INFO",
+  "root_cause": ["根因1", "根因2"],
+  "key_evidence": ["关键证据1", "关键证据2"],
+  "next_actions": ["建议动作1", "建议动作2"],
+  "confidence": "high|medium|low"
+}}
+
+要求：
+1. 优先基于日志事实输出，不要编造不存在的组件或报错。
+2. 如果规则分析结果不足，请结合原始日志进行更智能的归纳。
+3. root_cause、key_evidence、next_actions 必须是数组。
+4. overview 必须是面向排障场景的中文结论，不要写成统计结果。
+5. 不要输出 Markdown，不要输出解释文字。
+"""
+
 
 def build_agent_prompt(user_input, tool_specs=None):
     tool_specs = tool_specs or [
@@ -110,6 +131,21 @@ def build_json_repair_messages(raw_text, required_keys):
             ).strip(),
         },
         {"role": "user", "content": raw_text},
+    ]
+
+
+def build_log_summary_messages(user_input, analysis):
+    return [
+        {"role": "system", "content": LOG_SUMMARY_SYSTEM_INSTRUCTION_TEMPLATE.strip()},
+        {
+            "role": "user",
+            "content": (
+                "用户原始问题/日志如下：\n"
+                f"{user_input}\n\n"
+                "当前规则分析结果如下：\n"
+                f"{analysis}"
+            ),
+        },
     ]
 
 

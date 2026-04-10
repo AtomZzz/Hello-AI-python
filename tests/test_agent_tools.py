@@ -16,21 +16,35 @@ class AgentToolsTest(unittest.TestCase):
         self.assertGreaterEqual(result["error_count"], 2)
         self.assertTrue(result["has_traceback"])
         self.assertIn("ERROR", result["levels"])
+        self.assertIn("存在待进一步排查的应用或数据库错误", result["root_cause"])
 
-    def test_summarize_text_for_structured_analysis(self):
+    def test_analyze_log_extracts_diagnostic_root_causes(self):
+        log_text = """
+        2024-04-09 10:00:05 [WARNING] Slow query detected: SELECT * FROM users WHERE last_login < '2023-01-01' (execution time: 12.5s)
+        2024-04-09 10:00:10 [ERROR] Deadlock found when trying to get lock; try restarting transaction
+        2024-04-09 10:00:15 [ERROR] Connection timeout: Too many connections (max_connections: 151)
+        2024-04-09 10:00:20 [WARNING] Table 'cache_table' is marked as crashed and should be repaired
+        """
+        result = analyze_log(log_text)
+        self.assertIn("存在死锁竞争", result["root_cause"])
+        self.assertIn("数据库连接数不足（max_connections）", result["root_cause"])
+        self.assertIn("表损坏（cache_table）", result["root_cause"])
+        self.assertTrue(result["next_actions"])
+
+    def test_summarize_text_prefers_diagnosis(self):
         analysis = {
-            "line_count": 9,
-            "levels": {"INFO": 1, "WARN": 3, "ERROR": 5},
-            "error_count": 5,
-            "error_samples": ["ERROR deadlock found"],
+            "root_cause": ["数据库连接数不足（max_connections）", "存在死锁竞争", "表损坏（cache_table）"],
+            "evidence": ["数据库连接数不足（max_connections）（证据: 2024-04-09 10:00:15 [ERROR] Connection timeout: Too many connections (max_connections: 151)）"],
+            "next_actions": ["检查连接池配置与慢 SQL，必要时提升 max_connections 并释放空闲连接。"],
             "first_timestamp": "2024-04-09 10:00:00",
             "last_timestamp": "2024-04-09 10:00:40",
-            "has_traceback": False,
+            "error_count": 5,
         }
         summary = summarize_text(analysis)
-        self.assertIn("共解析 9 行日志", summary)
-        self.assertIn("ERROR:5", summary)
-        self.assertIn("Traceback=否", summary)
+        self.assertEqual(summary["severity"], "P1")
+        self.assertIn("数据库连接数不足（max_connections）", summary["root_cause"])
+        self.assertTrue(summary["key_evidence"])
+        self.assertTrue(summary["overview"])
 
 
 if __name__ == "__main__":
