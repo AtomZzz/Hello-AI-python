@@ -67,9 +67,8 @@ class AgentExecutor:
             action = "analyze_log"
 
         analysis = self.tools[action](tool_input)
-        summary_seed = json.dumps(analysis, ensure_ascii=False, indent=2)
         summary_tool = self.tools.get("summarize_text", summarize_text)
-        summary = summary_tool(summary_seed)
+        summary = summary_tool(analysis)
 
         final_answer = {
             "task_type": "日志分析",

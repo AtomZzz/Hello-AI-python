@@ -1,6 +1,7 @@
 # tools.py
 import re
 from collections import Counter
+from typing import Any
 
 
 def _normalize_lines(text):
@@ -58,16 +59,45 @@ def analyze_log(text):
     }
 
 
-def summarize_text(text):
-    """Generate a compact summary for plain text or serialized analysis output."""
-    content = (text or "").strip()
+def summarize_text(text: Any):
+    """Generate a stable Chinese summary for log analysis output."""
+    if isinstance(text, dict):
+        line_count = text.get("line_count", 0)
+        levels = text.get("levels") or {}
+        error_count = text.get("error_count", 0)
+        first_ts = text.get("first_timestamp") or "未识别"
+        last_ts = text.get("last_timestamp") or "未识别"
+        has_traceback = bool(text.get("has_traceback"))
+        samples = text.get("error_samples") or []
+
+        ordered_levels = ["FATAL", "CRITICAL", "ERROR", "WARN", "INFO", "DEBUG"]
+        level_parts = []
+        for key in ordered_levels:
+            if key in levels:
+                level_parts.append(f"{key}:{levels[key]}")
+        for key in sorted(levels.keys()):
+            if key not in ordered_levels:
+                level_parts.append(f"{key}:{levels[key]}")
+        level_text = "，".join(level_parts) if level_parts else "无"
+
+        summary = (
+            f"共解析 {line_count} 行日志；"
+            f"级别分布为 {level_text}；"
+            f"识别到 {error_count} 条异常；"
+            f"时间范围 {first_ts} 到 {last_ts}；"
+            f"Traceback={'是' if has_traceback else '否'}。"
+        )
+        if samples:
+            summary += f" 代表性错误: {samples[0]}"
+        return summary
+
+    content = str(text or "").strip()
     if not content:
         return "未检测到可总结内容。"
 
     lines = [line.strip() for line in content.splitlines() if line.strip()]
-    if len(lines) <= 3:
+    if len(lines) <= 2:
         return " | ".join(lines)
 
-    head = "；".join(lines[:3])
-    return f"{head}；其余内容已省略。"
+    return f"{lines[0]}；{lines[1]}；其余内容已省略。"
 

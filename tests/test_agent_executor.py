@@ -39,6 +39,7 @@ class AgentExecutorTest(unittest.TestCase):
         self.assertEqual(data["task_type"], "日志分析")
         self.assertIn("analysis", data)
         self.assertIn("summary", data)
+        self.assertNotIn('{"line_count"', data["summary"])
 
     def test_register_tool_and_execute(self):
         executor = AgentExecutor(FakeCustomToolLLM(), "fake-model")
