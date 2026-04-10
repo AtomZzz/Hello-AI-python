@@ -1,5 +1,6 @@
 requests
 python-dotenv
+flask
 dashscope
 sentence-transformers
 faiss-cpu

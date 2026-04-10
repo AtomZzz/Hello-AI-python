@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat Web</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='chat.css') }}" />
+</head>
+<body>
+<div class="app">
+    <header class="header">
+        <h1>AI 聊天助手</h1>
+        <p>简约版 Web 界面：展示输入与 AI 输出</p>
+    </header>
+
+    <main>
+        <section id="messages" class="messages"></section>
+
+        <section class="composer">
+            <textarea id="messageInput" placeholder="输入你的问题，支持粘贴多行日志..." rows="6"></textarea>
+            <div class="actions">
+                <button id="sendBtn">发送</button>
+            </div>
+            <p id="status" class="status"></p>
+        </section>
+    </main>
+</div>
+
+<script src="{{ url_for('static', filename='chat.js') }}"></script>
+</body>
+</html>
+
