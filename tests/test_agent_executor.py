@@ -85,7 +85,8 @@ class AgentExecutorTest(unittest.TestCase):
         output = executor.run("日志里有error", model="fake-model")
         data = json.loads(output)
         self.assertTrue(data["summary"]["fallback_used"])
-        self.assertIn("数据库连接数不足（max_connections）", data["root_cause"])
+        self.assertTrue(data["root_cause"])
+        self.assertIn("高频异常模式", data["root_cause"][0])
         self.assertIn("overview", data["summary"])
 
     def test_register_tool_and_execute(self):

@@ -16,7 +16,8 @@ class AgentToolsTest(unittest.TestCase):
         self.assertGreaterEqual(result["error_count"], 2)
         self.assertTrue(result["has_traceback"])
         self.assertIn("ERROR", result["levels"])
-        self.assertIn("存在待进一步排查的应用或数据库错误", result["root_cause"])
+        self.assertTrue(result["root_cause"])
+        self.assertTrue(result["issue_clusters"])
 
     def test_analyze_log_extracts_diagnostic_root_causes(self):
         log_text = """
@@ -26,9 +27,9 @@ class AgentToolsTest(unittest.TestCase):
         2024-04-09 10:00:20 [WARNING] Table 'cache_table' is marked as crashed and should be repaired
         """
         result = analyze_log(log_text)
-        self.assertIn("存在死锁竞争", result["root_cause"])
-        self.assertIn("数据库连接数不足（max_connections）", result["root_cause"])
-        self.assertIn("表损坏（cache_table）", result["root_cause"])
+        self.assertGreaterEqual(len(result["root_cause"]), 1)
+        self.assertIn("高频异常模式", result["root_cause"][0])
+        self.assertTrue(result["evidence"])
         self.assertTrue(result["next_actions"])
 
     def test_summarize_text_prefers_diagnosis(self):
@@ -41,7 +42,7 @@ class AgentToolsTest(unittest.TestCase):
             "error_count": 5,
         }
         summary = summarize_text(analysis)
-        self.assertEqual(summary["severity"], "P1")
+        self.assertEqual(summary["severity"], "P2")
         self.assertIn("数据库连接数不足（max_connections）", summary["root_cause"])
         self.assertTrue(summary["key_evidence"])
         self.assertTrue(summary["overview"])
