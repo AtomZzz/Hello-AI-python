@@ -78,32 +78,59 @@ LOG_SUMMARY_SYSTEM_INSTRUCTION_TEMPLATE = """
 """
 
 
-def build_agent_prompt(user_input, tool_specs=None):
+def build_agent_prompt(user_input, tool_specs=None, scratchpad=""):
     tool_specs = tool_specs or [
         "a. analyze_log(text) - 分析日志",
         "b. summarize_text(text) - 文本总结",
     ]
     tools_section = "\n".join(tool_specs)
+    scratchpad = (scratchpad or "").strip()
+    scratchpad_section = (
+        f"\n\n以下是你之前的推理与工具执行记录，请基于它继续：\n{scratchpad}\n"
+        if scratchpad
+        else ""
+    )
     return f"""
 你是一个AI Agent，可以使用以下工具：
 
 {tools_section}
 
-请按如下格式思考：
-
-Thought: 你要做什么
+你必须按ReAct流程工作，每一轮只做一件事：
+- 如果需要调用工具，必须输出：
+Thought: 你的思考
 Action: 工具名
 Action Input: 输入
-Observation: 工具返回结果
+- 如果你已经可以给出最终结论，输出：
+Thought: 你的思考
 Final Answer: 最终答案
+
+注意：
+1. 不要伪造 Observation，Observation 由系统返回。
+2. 一次响应中不要同时给出 Action 和 Final Answer。
+3. 优先使用工具结果进行结论。
 
 用户问题：
 {user_input}
+
+{scratchpad_section}
 """
 
 
 def build_agent_messages(user_input, tool_specs=None):
     return [{"role": "user", "content": build_agent_prompt(user_input, tool_specs=tool_specs).strip()}]
+
+
+def build_agent_step_messages(user_input, tool_specs=None, scratchpad=""):
+    return [
+        {
+            "role": "user",
+            "content": build_agent_prompt(
+                user_input,
+                tool_specs=tool_specs,
+                scratchpad=scratchpad,
+            ).strip(),
+        }
+    ]
 
 
 def build_messages(user_input, system_prompt=DEFAULT_SYSTEM_PROMPT, require_json=False):
