@@ -108,6 +108,8 @@ Final Answer: 最终答案
 1. 不要伪造 Observation，Observation 由系统返回。
 2. 一次响应中不要同时给出 Action 和 Final Answer。
 3. 优先使用工具结果进行结论。
+4. 当 Observation.type=analysis_result 时，如需总结请调用 summarize_text，输入应基于 analysis_result.data。
+5. Final Answer 必须严格基于已有 Observation，禁止引入 Observation 中未出现的新组件/新系统/新错误名。
 
 用户问题：
 {user_input}

@@ -8,6 +8,37 @@ def _normalize_lines(text):
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
+def _looks_like_instruction_line(line):
+    text = (line or "").strip()
+    lowered = text.lower()
+    if not text:
+        return False
+
+    # Keep log-like lines.
+    if re.search(r"\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\b", text):
+        return False
+    if re.search(r"\b(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL|TRACE)\b", text, flags=re.IGNORECASE):
+        return False
+    if lowered.startswith(("at ", "traceback", "caused by", "exception")):
+        return False
+
+    # Drop natural-language instruction headers like "帮我分析如下日志".
+    cn_prefix = ("请", "帮我", "分析", "排查", "诊断", "解释", "看下")
+    en_prefix = ("please", "analyze", "diagnose", "check", "investigate", "help me")
+    if (
+        (text.startswith(cn_prefix) or lowered.startswith(en_prefix))
+        and ("日志" in text or "报错" in text or "error" in lowered or "log" in lowered)
+    ):
+        return True
+    return False
+
+
+def _prepare_log_lines(text):
+    raw_lines = _normalize_lines(text)
+    filtered = [line for line in raw_lines if not _looks_like_instruction_line(line)]
+    return filtered or raw_lines
+
+
 def _append_unique(items, value):
     if value and value not in items:
         items.append(value)
@@ -74,7 +105,7 @@ def _build_root_causes_from_clusters(issue_clusters):
 
 def analyze_log(text):
     """Analyze logs in a domain-agnostic way with error clustering."""
-    lines = _normalize_lines(text)
+    lines = _prepare_log_lines(text)
     level_counter = Counter()
     error_lines = []
     signature_counter = Counter()
