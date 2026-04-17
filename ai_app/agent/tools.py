@@ -1,7 +1,45 @@
 # tools.py
 import re
 from collections import Counter
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List
+
+
+@dataclass
+class Tool:
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+
+    def run(self, input_data: Dict[str, Any]) -> Any:
+        raise NotImplementedError
+
+
+class FunctionTool(Tool):
+    def __init__(self, name: str, description: str, input_schema: Dict[str, Any], handler: Callable[[Dict[str, Any]], Any]):
+        super().__init__(name=name, description=description, input_schema=input_schema)
+        self._handler = handler
+
+    def run(self, input_data: Dict[str, Any]) -> Any:
+        return self._handler(input_data)
+
+
+ANALYZE_LOG_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "required": ["text"],
+    "properties": {
+        "text": {"type": "string"},
+    },
+}
+
+
+SUMMARIZE_TEXT_INPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string"},
+        "analysis": {"type": "object"},
+    },
+}
 
 
 def _normalize_lines(text):
@@ -252,4 +290,33 @@ def summarize_text(text: Any):
         "next_actions": ["建议结合完整上下文进一步排查。"],
         "confidence": "low",
     }
+
+
+def _run_analyze_log(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    return analyze_log(str((input_data or {}).get("text", "")))
+
+
+def _run_summarize_text(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = input_data or {}
+    if isinstance(payload.get("analysis"), dict):
+        return summarize_text(payload.get("analysis"))
+    return summarize_text(payload.get("text", ""))
+
+
+def build_default_tools() -> List[Tool]:
+    return [
+        FunctionTool(
+            name="analyze_log",
+            description="分析日志并提取结构化诊断结果",
+            input_schema=ANALYZE_LOG_INPUT_SCHEMA,
+            handler=_run_analyze_log,
+        ),
+        FunctionTool(
+            name="summarize_text",
+            description="基于分析结果生成稳定总结",
+            input_schema=SUMMARIZE_TEXT_INPUT_SCHEMA,
+            handler=_run_summarize_text,
+        ),
+    ]
+
 

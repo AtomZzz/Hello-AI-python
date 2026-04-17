@@ -2,12 +2,23 @@
 import json
 import logging
 import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Tuple
 
-from ai_app.agent.tools import analyze_log, summarize_text
+from ai_app.agent.tools import FunctionTool, Tool, build_default_tools
+from ai_app.parser.json_parser import JsonParser
 from ai_app.prompt.templates import build_agent_step_messages
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class AgentState:
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    iteration: int = 0
+    max_iterations: int = 5
+    finished: bool = False
 
 
 class AgentExecutor:
@@ -15,22 +26,48 @@ class AgentExecutor:
         self.llm_client = llm_client
         self.model = model
         self.max_steps = max_steps
-        self.tools = {}
-        self.tool_descriptions = {}
-        self.register_tool("analyze_log", analyze_log, "分析日志")
-        self.register_tool("summarize_text", summarize_text, "文本总结")
+        self.tools: Dict[str, Tool] = {}
+        self.step_parser = JsonParser(required_keys=["thought", "action", "action_input"])
+        for tool in build_default_tools():
+            self.register_tool(tool)
 
-    def register_tool(self, name, fn, description):
-        if not name or not callable(fn):
-            raise ValueError("工具注册失败: name不能为空且fn必须可调用")
-        self.tools[name] = fn
-        self.tool_descriptions[name] = description or ""
+    def register_tool(self, tool_or_name, fn=None, description="", input_schema=None):
+        if isinstance(tool_or_name, Tool):
+            tool = tool_or_name
+        else:
+            name = str(tool_or_name or "").strip()
+            if not name or not callable(fn):
+                raise ValueError("工具注册失败: name不能为空且fn必须可调用")
+
+            schema = input_schema or {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                },
+            }
+
+            def _legacy_handler(input_data):
+                payload = input_data or {}
+                if isinstance(payload, dict) and "text" in payload and len(payload) == 1:
+                    return fn(payload.get("text"))
+                return fn(payload)
+
+            tool = FunctionTool(
+                name=name,
+                description=description or "",
+                input_schema=schema,
+                handler=_legacy_handler,
+            )
+
+        self.tools[tool.name] = tool
 
     def list_tool_specs(self):
         specs = []
-        for idx, (name, description) in enumerate(self.tool_descriptions.items(), start=1):
+        for idx, tool in enumerate(self.tools.values(), start=1):
             label = chr(ord("a") + idx - 1)
-            specs.append(f"{label}. {name}(text) - {description}")
+            specs.append(
+                f"{label}. {tool.name} - {tool.description} | schema={json.dumps(tool.input_schema, ensure_ascii=False)}"
+            )
         return specs
 
     def can_handle(self, user_input):
@@ -42,117 +79,11 @@ class AgentExecutor:
         return any(word in text for word in indicators)
 
     @staticmethod
-    def _parse_action(agent_text):
-        action_match = re.search(r"^Action:\s*(.+)$", agent_text, flags=re.MULTILINE)
-        input_match = re.search(r"^Action Input:\s*([\s\S]+?)(?:\n(?:Observation:|Final Answer:)|$)", agent_text, flags=re.MULTILINE)
-        action = action_match.group(1).strip() if action_match else ""
-        action_input = input_match.group(1).strip() if input_match else ""
-        return action, action_input
-
-    @staticmethod
-    def _parse_final_answer(agent_text):
-        match = re.search(r"^Final Answer:\s*([\s\S]+)$", agent_text, flags=re.MULTILINE)
-        if not match:
-            return ""
-        return match.group(1).strip()
-
-    @staticmethod
-    def _normalize_list(value):
-        if isinstance(value, list):
-            return [str(item) for item in value if str(item).strip()]
-        if value in (None, ""):
-            return []
-        return [str(value)]
-
-    @staticmethod
-    def _to_observation_text(observation):
-        if isinstance(observation, (dict, list)):
-            return json.dumps(observation, ensure_ascii=False)
-        return str(observation)
-
-    @staticmethod
-    def _safe_tool_output(value):
-        if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
-            return value
-        return str(value)
-
-    @staticmethod
-    def _contains_unseen_facts(answer_text, tool_trace):
-        observation_text = json.dumps([item.get("observation", {}) for item in tool_trace], ensure_ascii=False).lower()
-        # Reject unseen English-like technical tokens (e.g., H2, Redis, Kafka) in final answer.
-        token_candidates = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}", answer_text or "")
-        generic_tokens = {"final", "answer", "error", "warning", "timeout", "traceback", "log"}
-        for token in token_candidates:
-            token_l = token.lower()
-            if token_l in generic_tokens:
-                continue
-            if token_l not in observation_text:
-                return True
-
-        # Reject unseen numeric facts in final answer.
-        number_tokens = re.findall(r"\b\d+\b", answer_text or "")
-        for number in number_tokens:
-            if number not in observation_text:
-                return True
-        return False
-
-    @staticmethod
-    def _extract_anchor_items(observation_data):
-        if not isinstance(observation_data, dict):
-            return []
-        anchors = []
-        for key in ("root_cause", "key_evidence", "evidence"):
-            value = observation_data.get(key)
-            if isinstance(value, list):
-                anchors.extend(str(item).strip() for item in value if str(item).strip())
-            elif isinstance(value, str) and value.strip():
-                anchors.append(value.strip())
-        return anchors
-
-    def _is_final_answer_grounded(self, answer_text, tool_trace):
-        if not answer_text or not tool_trace:
-            return False
-        if self._contains_unseen_facts(answer_text, tool_trace):
-            return False
-
-        latest_summary = None
-        latest_analysis = None
-        for item in reversed(tool_trace):
-            obs = item.get("observation") or {}
-            obs_type = obs.get("type")
-            obs_data = obs.get("data")
-            if latest_summary is None and obs_type == "summary_result" and isinstance(obs_data, dict):
-                latest_summary = obs_data
-            if latest_analysis is None and obs_type == "analysis_result" and isinstance(obs_data, dict):
-                latest_analysis = obs_data
-
-        answer_text_lower = answer_text.lower()
-        anchor_source = latest_summary or latest_analysis or {}
-        anchors = self._extract_anchor_items(anchor_source)
-        if not anchors:
-            return True
-
-        return any(anchor.lower() in answer_text_lower for anchor in anchors)
-
-    @staticmethod
-    def _parse_action_input_payload(action_input):
-        text = (action_input or "").strip()
-        if not text:
-            return None
-        if not (text.startswith("{") or text.startswith("[")):
-            return None
-        try:
-            return json.loads(text)
-        except Exception:
-            return None
-
-    def _build_observation(self, action_name, result):
+    def _build_observation(action_name, result):
         if action_name == "analyze_log":
             observation_type = "analysis_result"
         elif action_name == "summarize_text":
             observation_type = "summary_result"
-        elif action_name in ("<empty>", "<none>"):
-            observation_type = "tool_error"
         else:
             observation_type = "tool_result"
         return {
@@ -160,16 +91,111 @@ class AgentExecutor:
             "data": result,
         }
 
+    @staticmethod
+    def _normalize_action_input(action_input: Any) -> Dict[str, Any]:
+        if isinstance(action_input, dict):
+            return action_input
+        if isinstance(action_input, str):
+            return {"text": action_input}
+        if action_input is None:
+            return {}
+        return {"value": action_input}
+
+    def _validate_input(self, payload: Dict[str, Any], schema: Dict[str, Any]) -> Tuple[bool, str]:
+        if schema.get("type") == "object" and not isinstance(payload, dict):
+            return False, "action_input 必须是对象"
+
+        required = schema.get("required") or []
+        for key in required:
+            if key not in payload:
+                return False, f"缺少必填字段: {key}"
+
+        type_map = {
+            "string": str,
+            "object": dict,
+            "array": list,
+            "number": (int, float),
+            "boolean": bool,
+        }
+        properties = schema.get("properties") or {}
+        for key, rule in properties.items():
+            if key not in payload:
+                continue
+            expected_type = rule.get("type")
+            if expected_type in type_map and not isinstance(payload[key], type_map[expected_type]):
+                return False, f"字段 {key} 类型错误，期望 {expected_type}"
+        return True, ""
+
+    def safe_tool_call(self, action, action_input):
+        if action not in self.tools:
+            return {
+                "error": f"工具不存在: {action}",
+                "available_tools": list(self.tools.keys()),
+            }
+
+        tool = self.tools[action]
+        payload = self._normalize_action_input(action_input)
+        ok, reason = self._validate_input(payload, tool.input_schema)
+        if not ok:
+            return {
+                "error": f"参数校验失败: {reason}",
+                "schema": tool.input_schema,
+            }
+
+        try:
+            return tool.run(payload)
+        except Exception as exc:
+            return {"error": f"工具执行失败: {exc}"}
+
+    def _parse_step_json(self, llm_output: str) -> Dict[str, Any]:
+        parsed = self.step_parser.parse(llm_output or "")
+        if parsed:
+            return parsed
+
+        # Backward-compatible fallback for old non-JSON ReAct format.
+        action_match = re.search(r"^Action:\s*(.+)$", llm_output or "", flags=re.MULTILINE)
+        input_match = re.search(
+            r"^Action Input:\s*([\s\S]+?)(?:\n(?:Observation:|Final Answer:)|$)",
+            llm_output or "",
+            flags=re.MULTILINE,
+        )
+        final_match = re.search(r"^Final Answer:\s*([\s\S]+)$", llm_output or "", flags=re.MULTILINE)
+        thought_match = re.search(r"^Thought:\s*([\s\S]+?)(?:\nAction:|\nFinal Answer:|$)", llm_output or "", flags=re.MULTILINE)
+
+        if final_match:
+            return {
+                "thought": (thought_match.group(1).strip() if thought_match else ""),
+                "action": "final_answer",
+                "action_input": {"answer": final_match.group(1).strip()},
+            }
+
+        return {
+            "thought": (thought_match.group(1).strip() if thought_match else ""),
+            "action": (action_match.group(1).strip() if action_match else ""),
+            "action_input": (input_match.group(1).strip() if input_match else {}),
+        }
+
+    @staticmethod
+    def _extract_summary(result: Any) -> Dict[str, Any]:
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def _extract_analysis(result: Any) -> Dict[str, Any]:
+        return result if isinstance(result, dict) else {}
+
     def run(self, user_input, model=None):
         use_model = model or self.model
+        state = AgentState(max_iterations=self.max_steps)
         scratchpad = ""
-        final_answer_text = ""
-        tool_trace = []
         analysis = {}
-        summary = None
-        final_answer_grounded = False
+        summary = {}
+        final_answer_text = ""
 
-        for step in range(1, self.max_steps + 1):
+        while not state.finished:
+            state.iteration += 1
+            if state.iteration > state.max_iterations:
+                break
+
             try:
                 llm_output = self.llm_client.generate(
                     build_agent_step_messages(
@@ -180,117 +206,98 @@ class AgentExecutor:
                     use_model,
                 )
             except Exception as exc:
-                logger.warning("Agent step failed at step=%s, fallback to analyze_log: %s", step, exc)
+                logger.warning("Agent step failed at iteration=%s: %s", state.iteration, exc)
                 llm_output = ""
 
-            final_answer_text = self._parse_final_answer(llm_output or "")
-            if final_answer_text:
-                if not tool_trace:
-                    # Final answer must be based on observations.
-                    scratchpad += "\n系统提示: 你还没有任何 Observation，请先调用工具再给 Final Answer。\n"
-                    final_answer_text = ""
-                elif not self._is_final_answer_grounded(final_answer_text, tool_trace):
-                    scratchpad += "\n系统提示: 你的 Final Answer 未充分引用 Observation 的 root_cause/evidence，或含未出现信息，请重试。\n"
-                    final_answer_text = ""
-                else:
-                    final_answer_grounded = True
-                    break
+            parsed = self._parse_step_json(llm_output)
+            thought = str(parsed.get("thought") or "").strip()
+            action = str(parsed.get("action") or "").strip()
+            action_input = self._normalize_action_input(parsed.get("action_input"))
 
-            action, action_input = self._parse_action(llm_output or "")
-            requested_input = action_input or user_input
+            if action == "final_answer":
+                final_answer_text = str(
+                    action_input.get("answer")
+                    or action_input.get("final_answer")
+                    or action_input.get("text")
+                    or ""
+                ).strip()
+                if not final_answer_text:
+                    final_answer_text = "已完成分析，请查看 steps 里的工具输出。"
+                state.finished = True
+                state.steps.append(
+                    {
+                        "thought": thought,
+                        "action": action,
+                        "input": action_input,
+                        "observation": {"type": "final_answer", "data": final_answer_text},
+                    }
+                )
+                break
 
-            # Ensure log analysis always consumes the full original user input.
+            # Enterprise guardrails for deterministic routing.
             if action == "analyze_log":
-                tool_input = user_input
+                effective_input = {"text": user_input}
             elif action == "summarize_text":
-                payload = self._parse_action_input_payload(action_input)
-                if not analysis:
-                    fallback_analysis = self.tools.get("analyze_log", analyze_log)
-                    analysis = self._safe_tool_output(fallback_analysis(user_input))
-                    if not isinstance(analysis, dict):
-                        analysis = {"raw": analysis}
-                # Prefer model-provided structured payload when valid; fallback to analysis.
-                tool_input = payload if isinstance(payload, dict) else analysis
+                if isinstance(action_input.get("analysis"), dict):
+                    effective_input = {"analysis": action_input.get("analysis")}
+                elif analysis:
+                    effective_input = {"analysis": analysis}
+                else:
+                    effective_input = {"text": user_input}
             else:
-                tool_input = requested_input
+                effective_input = action_input
 
-            if action not in self.tools:
-                tool_result = {
-                    "error": f"工具不存在: {action or '<empty>'}",
-                    "available_tools": list(self.tools.keys()),
-                }
-                normalized_action = action or "<empty>"
-            else:
-                normalized_action = action
-                try:
-                    tool_result = self._safe_tool_output(self.tools[action](tool_input))
-                except Exception as exc:
-                    tool_result = {"error": f"工具执行失败: {exc}"}
+            tool_result = self.safe_tool_call(action, effective_input)
+            observation = self._build_observation(action, tool_result)
 
-            observation = self._build_observation(normalized_action, tool_result)
-
-            if normalized_action == "analyze_log" and isinstance(tool_result, dict):
-                analysis = tool_result
-            elif not analysis and normalized_action != "summarize_text" and isinstance(tool_result, dict):
-                # Allow custom analysis tools to provide the primary structured analysis.
-                analysis = tool_result
-            if normalized_action == "summarize_text":
-                summary = tool_result
-
-            tool_trace.append(
+            state.steps.append(
                 {
-                    "step": step,
-                    "action": normalized_action,
-                    "action_input": requested_input,
-                    "action_input_effective": tool_input,
+                    "thought": thought,
+                    "action": action,
+                    "input": effective_input,
                     "observation": observation,
                 }
             )
 
-            observation_text = self._to_observation_text(observation)
+            if action == "analyze_log" and isinstance(tool_result, dict) and "error" not in tool_result:
+                analysis = self._extract_analysis(tool_result)
+            if action == "summarize_text" and isinstance(tool_result, dict) and "error" not in tool_result:
+                summary = self._extract_summary(tool_result)
+
             scratchpad += (
-                f"\nThought/Action 输出:\n{(llm_output or '').strip()}\n"
-                f"Observation: {observation_text}\n"
+                f"\nStepJSON: {json.dumps(parsed, ensure_ascii=False)}\n"
+                f"Observation: {json.dumps(observation, ensure_ascii=False)}\n"
             )
 
         if not analysis:
-            fallback_analysis = self.tools.get("analyze_log", analyze_log)
-            analysis = self._safe_tool_output(fallback_analysis(user_input))
-            if not isinstance(analysis, dict):
-                analysis = {"raw": analysis}
+            analysis_result = self.safe_tool_call("analyze_log", {"text": user_input})
+            if isinstance(analysis_result, dict) and "error" not in analysis_result:
+                analysis = analysis_result
+
+        if not summary and analysis:
+            summary_result = self.safe_tool_call("summarize_text", {"analysis": analysis})
+            if isinstance(summary_result, dict) and "error" not in summary_result:
+                summary = summary_result
 
         if not final_answer_text:
-            fallback_overview = "已完成日志分析，请查看结构化结果。"
-            if isinstance(summary, dict):
-                fallback_overview = str(summary.get("overview") or fallback_overview)
-            elif summary is not None:
-                fallback_overview = str(summary)
-            final_answer_text = fallback_overview
-            final_answer_grounded = True
+            final_answer_text = (
+                str(summary.get("overview"))
+                if isinstance(summary, dict) and summary.get("overview")
+                else "已完成日志分析，请查看结构化结果。"
+            )
 
-        if summary is None:
-            summary = {
-                "overview": final_answer_text,
-                "severity": "INFO",
-                "root_cause": analysis.get("root_cause", []) if isinstance(analysis, dict) else [],
-                "key_evidence": analysis.get("evidence", []) if isinstance(analysis, dict) else [],
-                "next_actions": analysis.get("next_actions", []) if isinstance(analysis, dict) else [],
-                "confidence": "low",
-                "auto_generated": True,
-            }
-
-        final_answer = {
+        result = {
             "task_type": "日志分析",
-            "max_steps": self.max_steps,
-            "steps_used": len(tool_trace),
-            "tool_trace": tool_trace,
-            "analysis": analysis,
-            "root_cause": self._normalize_list((summary or {}).get("root_cause") if isinstance(summary, dict) else analysis.get("root_cause", [])),
-            "evidence": self._normalize_list((summary or {}).get("key_evidence") if isinstance(summary, dict) else analysis.get("evidence", [])),
-            "next_actions": self._normalize_list((summary or {}).get("next_actions") if isinstance(summary, dict) else analysis.get("next_actions", [])),
-            "summary": summary,
             "final_answer": final_answer_text,
-            "final_answer_grounded": final_answer_grounded,
+            "steps": state.steps,
+            "max_iterations": state.max_iterations,
+            "iterations": state.iteration,
+            "finished": state.finished,
+            "analysis": analysis,
+            "summary": summary,
+            # Backward-compatible fields.
+            "steps_used": len(state.steps),
+            "tool_trace": state.steps,
         }
-        return json.dumps(final_answer, ensure_ascii=False, indent=2)
+        return json.dumps(result, ensure_ascii=False, indent=2)
 

@@ -95,21 +95,23 @@ def build_agent_prompt(user_input, tool_specs=None, scratchpad=""):
 
 {tools_section}
 
-你必须按ReAct流程工作，每一轮只做一件事：
-- 如果需要调用工具，必须输出：
-Thought: 你的思考
-Action: 工具名
-Action Input: 输入
-- 如果你已经可以给出最终结论，输出：
-Thought: 你的思考
-Final Answer: 最终答案
+你必须输出JSON，且每次只输出一个JSON对象，格式固定为：
+{{
+  "thought": "你的思考",
+  "action": "tool_name 或 final_answer",
+  "action_input": {{}}
+}}
+
+规则：
+1. 如果需要调用工具：action=工具名，action_input必须是对象，且满足工具schema。
+2. 如果结束：action=final_answer，action_input={{"answer": "最终结论"}}。
+3. 不允许输出 Markdown，不允许输出 JSON 之外的内容。
+4. Final Answer 必须严格基于 Observation，不允许引入未出现信息。
 
 注意：
 1. 不要伪造 Observation，Observation 由系统返回。
-2. 一次响应中不要同时给出 Action 和 Final Answer。
-3. 优先使用工具结果进行结论。
-4. 当 Observation.type=analysis_result 时，如需总结请调用 summarize_text，输入应基于 analysis_result.data。
-5. Final Answer 必须严格基于已有 Observation，禁止引入 Observation 中未出现的新组件/新系统/新错误名。
+2. 优先使用工具结果进行结论。
+3. 当 Observation.type=analysis_result 时，如需总结请调用 summarize_text，输入应基于 analysis_result.data。
 
 用户问题：
 {user_input}
@@ -176,5 +178,4 @@ def build_log_summary_messages(user_input, analysis):
             ),
         },
     ]
-
 

@@ -1,9 +1,13 @@
 import unittest
+import json
 
 from ai_app.service.chat_service import ChatService
 
 
 class DummyLLM:
+    def __init__(self):
+        self.calls = 0
+
     def list_models(self):
         return ["dummy-model"]
 
@@ -15,13 +19,23 @@ class DummyLLM:
         if "你是请求路由器" in system_text:
             return '{"use_agent": true, "use_rag": false, "require_json": true, "reason": "日志分析走Agent"}'
 
-        # For agent planning calls.
-        return (
-            "Thought: 调用日志分析工具\n"
-            "Action: analyze_log\n"
-            "Action Input: 2026-04-09 ERROR bad request\n"
-            "Observation: ...\n"
-            "Final Answer: done"
+        self.calls += 1
+        if self.calls == 1:
+            return json.dumps(
+                {
+                    "thought": "调用日志分析工具",
+                    "action": "analyze_log",
+                    "action_input": {"text": "2026-04-09 ERROR bad request"},
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "thought": "结束",
+                "action": "final_answer",
+                "action_input": {"answer": "done"},
+            },
+            ensure_ascii=False,
         )
 
 
