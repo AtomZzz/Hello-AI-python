@@ -5,6 +5,8 @@ import time
 import uuid
 
 from ai_app.agent.executor import AgentExecutor
+from ai_app.agent.plan_executor import PlanExecutor
+from ai_app.agent.planner import Planner
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
 from ai_app.llm.qwen_client import QwenLLMClient
@@ -47,6 +49,8 @@ class ChatService:
         self.route_parser = JsonParser(required_keys=["use_agent", "use_rag", "require_json", "reason"])
         self.rag_service = None
         self.agent_executor = None
+        self.planner = None
+        self.plan_executor = None
         self.last_route = None
         self.last_router_model = self.router_model
 
@@ -56,6 +60,24 @@ class ChatService:
         if self.agent_executor is None:
             self.agent_executor = AgentExecutor(self.llm, self.model)
         return self.agent_executor
+
+    def _get_planner(self):
+        if not self.agent_enabled:
+            return None
+        if self.planner is None:
+            self.planner = Planner(self.llm, self.model)
+        return self.planner
+
+    def _get_plan_executor(self):
+        if not self.agent_enabled:
+            return None
+        if self.plan_executor is None:
+            planner = self._get_planner()
+            agent_executor = self._get_agent_executor()
+            if not planner or not agent_executor:
+                return None
+            self.plan_executor = PlanExecutor(planner, agent_executor)
+        return self.plan_executor
 
     def _get_rag_service(self):
         if not self.rag_enabled:
@@ -217,13 +239,13 @@ class ChatService:
         )
 
         if route["use_agent"]:
-            agent_executor = self._get_agent_executor()
-            if not agent_executor:
+            plan_executor = self._get_plan_executor()
+            if not plan_executor:
                 logger.warning("Agent route requested but executor unavailable, fallback to direct LLM")
             else:
                 try:
                     logger.info("Agent route enabled request_id=%s model=%s", request_id, use_model)
-                    output = agent_executor.run(user_input, use_model)
+                    output = plan_executor.run(user_input, use_model)
                     elapsed = time.perf_counter() - start
                     logger.info("Agent done request_id=%s elapsed=%.2fs", request_id, elapsed)
                     return output
