@@ -7,6 +7,7 @@ import uuid
 from ai_app.agent.executor import AgentExecutor
 from ai_app.agent.plan_executor import PlanExecutor
 from ai_app.agent.planner import Planner
+from ai_app.agent.critic import Critic
 from ai_app.llm.ollama_client import OllamaClient
 from ai_app.llm.online_llm_client import OnlineLLMClient
 from ai_app.llm.qwen_client import QwenLLMClient
@@ -50,6 +51,7 @@ class ChatService:
         self.rag_service = None
         self.agent_executor = None
         self.planner = None
+        self.critic = None
         self.plan_executor = None
         self.last_route = None
         self.last_router_model = self.router_model
@@ -68,15 +70,23 @@ class ChatService:
             self.planner = Planner(self.llm, self.model)
         return self.planner
 
+    def _get_critic(self):
+        if not self.agent_enabled:
+            return None
+        if self.critic is None:
+            self.critic = Critic(self.llm, self.model)
+        return self.critic
+
     def _get_plan_executor(self):
         if not self.agent_enabled:
             return None
         if self.plan_executor is None:
             planner = self._get_planner()
             agent_executor = self._get_agent_executor()
-            if not planner or not agent_executor:
+            critic = self._get_critic()
+            if not planner or not agent_executor or not critic:
                 return None
-            self.plan_executor = PlanExecutor(planner, agent_executor)
+            self.plan_executor = PlanExecutor(planner, agent_executor, critic)
         return self.plan_executor
 
     def _get_rag_service(self):

@@ -50,7 +50,6 @@ class Planner:
             [{"role": "user", "content": prompt.strip()}],
             use_model,
         )
-        print("Raw Plan:", raw_plan)
         parsed = self.parser.parse(raw_plan or "") or {}
         tasks = self._coerce_tasks(parsed.get("tasks"))
         return self._filter_tasks(tasks, user_input)

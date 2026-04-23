@@ -33,6 +33,24 @@ class RecordingAgent:
         )
 
 
+class SequenceCritic:
+    def __init__(self, decisions):
+        self.decisions = list(decisions)
+        self.idx = 0
+
+    def evaluate(self, user_input, plan, result, model=None):
+        if self.idx >= len(self.decisions):
+            decision = self.decisions[-1]
+        else:
+            decision = self.decisions[self.idx]
+            self.idx += 1
+        return {
+            "decision": decision,
+            "reason": "result is incomplete" if decision == "reject" else "",
+            "suggestion": "add more evidence" if decision == "reject" else "",
+        }
+
+
 class PlannerAndPlanExecutorTest(unittest.TestCase):
     def test_planner_filters_disallowed_tasks_and_keeps_max_5(self):
         llm = SequenceLLM(
@@ -77,7 +95,8 @@ class PlannerAndPlanExecutorTest(unittest.TestCase):
         )
         planner = Planner(llm, "fake-model")
         agent = RecordingAgent()
-        executor = PlanExecutor(planner, agent)
+        critic = SequenceCritic(["approve", "approve"])
+        executor = PlanExecutor(planner, agent, critic)
 
         output = executor.run("line-1 ERROR timeout", model="fake-model")
         data = json.loads(output)
@@ -86,6 +105,27 @@ class PlannerAndPlanExecutorTest(unittest.TestCase):
         self.assertEqual(len(data["execution_trace"]), 2)
         self.assertEqual(data["final_answer"], "处理完成#2")
         self.assertIn("处理完成#1", agent.inputs[1])
+        self.assertIn("critic_summary", data)
+        self.assertEqual(data["critic_summary"]["approved"], 2)
+
+    def test_plan_executor_retries_when_critic_rejects(self):
+        llm = SequenceLLM([json.dumps({"tasks": ["日志分析：定位错误"]}, ensure_ascii=False)])
+        planner = Planner(llm, "fake-model")
+        agent = RecordingAgent()
+        critic = SequenceCritic(["reject", "approve"])
+        executor = PlanExecutor(planner, agent, critic, max_retry=2)
+
+        output = executor.run("line-1 ERROR timeout", model="fake-model")
+        data = json.loads(output)
+
+        self.assertEqual(len(data["execution_trace"]), 2)
+        self.assertEqual(data["execution_trace"][0]["attempt"], 0)
+        self.assertEqual(data["execution_trace"][1]["attempt"], 1)
+        self.assertEqual(data["execution_trace"][0]["critique"]["decision"], "reject")
+        self.assertEqual(data["execution_trace"][1]["critique"]["decision"], "approve")
+        self.assertIn("原始任务", agent.inputs[1])
+        self.assertEqual(data["critic_summary"]["rejected"], 1)
+        self.assertEqual(data["critic_summary"]["approved"], 1)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,16 @@ class DummyLLM:
                 ensure_ascii=False,
             )
 
+        if "质量评估专家" in user_text:
+            return json.dumps(
+                {
+                    "decision": "approve",
+                    "reason": "result is grounded",
+                    "suggestion": "",
+                },
+                ensure_ascii=False,
+            )
+
         self.calls += 1
         if self.calls % 2 == 1:
             return json.dumps(
@@ -69,6 +79,7 @@ class ChatServiceAgentRouteTest(unittest.TestCase):
         self.assertIn("plan", data)
         self.assertIn("execution_trace", data)
         self.assertIn("final_answer", data)
+        self.assertIn("critic_summary", data)
         self.assertTrue(data["plan"])
         self.assertEqual(service.last_route.get("source"), "ai")
         self.assertTrue(service.last_route.get("use_agent"))
