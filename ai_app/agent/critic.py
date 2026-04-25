@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from ai_app.parser.json_parser import JsonParser
 
 
-def build_critic_prompt(user_input, plan, result):
+def build_critic_prompt(user_input, task, result):
     return f"""
 你是一个AI系统的质量评估专家，请判断以下结果是否可靠。
 
@@ -23,8 +23,8 @@ def build_critic_prompt(user_input, plan, result):
 用户问题：
 {user_input}
 
-执行计划：
-{plan}
+当前任务：
+{task}
 
 执行结果：
 {result}
@@ -37,9 +37,15 @@ class Critic:
         self.model = model
         self.parser = JsonParser(required_keys=["decision"])
 
-    def evaluate(self, user_input, plan, result, model: Optional[str] = None) -> Dict[str, Any]:
+    def evaluate(
+        self,
+        user_input: str,
+        task: str,
+        result: Dict[str, Any],
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
         use_model = model or self.model
-        prompt = build_critic_prompt(user_input, plan, result)
+        prompt = build_critic_prompt(user_input, task, result)
 
         output = self.llm.generate(
             [{"role": "user", "content": prompt.strip()}],

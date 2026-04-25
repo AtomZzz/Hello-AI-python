@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ai_app.parser.json_parser import JsonParser
 
@@ -37,6 +37,55 @@ def build_planner_prompt(user_input):
 """
 
 
+def build_replan_prompt(
+    user_input: str,
+    completed_tasks: List[str],
+    failed_task: str,
+    critique: Dict[str, Any],
+    context: str,
+) -> str:
+    completed_section = "\n".join(f"- {t}" for t in (completed_tasks or [])) or "(无)"
+    critique_reason = str(critique.get("reason") or "").strip()
+    critique_suggestion = str(critique.get("suggestion") or "").strip()
+    context = (context or "").strip()
+    context_section = context if context else "(无)"
+
+    return f"""
+你是一个企业级任务规划器。当前执行过程中，某个任务未通过质量审核（Critic reject）。
+你需要基于 Critic 的反馈重新规划“剩余任务”，避免重复无效步骤，并确保每步可执行。
+
+硬性要求：
+1. 只输出JSON
+2. tasks 只包含“后续还需要执行的任务”（不要包含已完成任务）
+3. 不要超过5步
+4. 每个task必须是可执行的、明确的
+5. 优先吸收 Critic 的 suggestion，修正 failed_task 的策略或拆分为更小步骤
+
+格式：
+{{
+  "tasks": ["task1", "task2"]
+}}
+
+用户问题：
+{user_input}
+
+已完成任务：
+{completed_section}
+
+失败任务（未通过审核）：
+{failed_task}
+
+Critic 反馈原因：
+{critique_reason}
+
+Critic 改进建议：
+{critique_suggestion}
+
+当前已知信息（仅包含已通过审核的结果）：
+{context_section}
+"""
+
+
 class Planner:
     def __init__(self, llm_client, model: str):
         self.llm_client = llm_client
@@ -46,6 +95,31 @@ class Planner:
     def plan(self, user_input: str, model: Optional[str] = None) -> List[str]:
         use_model = model or self.model
         prompt = build_planner_prompt(user_input)
+        raw_plan = self.llm_client.generate(
+            [{"role": "user", "content": prompt.strip()}],
+            use_model,
+        )
+        parsed = self.parser.parse(raw_plan or "") or {}
+        tasks = self._coerce_tasks(parsed.get("tasks"))
+        return self._filter_tasks(tasks, user_input)
+
+    def replan(
+        self,
+        user_input: str,
+        completed_tasks: List[str],
+        failed_task: str,
+        critique: Dict[str, Any],
+        context: str,
+        model: Optional[str] = None,
+    ) -> List[str]:
+        use_model = model or self.model
+        prompt = build_replan_prompt(
+            user_input=user_input,
+            completed_tasks=completed_tasks,
+            failed_task=failed_task,
+            critique=critique,
+            context=context,
+        )
         raw_plan = self.llm_client.generate(
             [{"role": "user", "content": prompt.strip()}],
             use_model,

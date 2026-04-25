@@ -38,7 +38,7 @@ class SequenceCritic:
         self.decisions = list(decisions)
         self.idx = 0
 
-    def evaluate(self, user_input, plan, result, model=None):
+    def evaluate(self, user_input, task, result, model=None):
         if self.idx >= len(self.decisions):
             decision = self.decisions[-1]
         else:

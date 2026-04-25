@@ -23,14 +23,14 @@ class CriticTest(unittest.TestCase):
             [json.dumps({"decision": "approve", "reason": "ok", "suggestion": ""}, ensure_ascii=False)]
         )
         critic = Critic(llm, "fake-model")
-        data = critic.evaluate("q", ["t1"], {"final_answer": "done"})
+        data = critic.evaluate("q", "t1", {"final_answer": "done"})
         self.assertEqual(data["decision"], "approve")
         self.assertEqual(data["reason"], "ok")
 
     def test_evaluate_invalid_decision_defaults_to_reject(self):
         llm = SequenceLLM([json.dumps({"decision": "maybe"}, ensure_ascii=False)])
         critic = Critic(llm, "fake-model")
-        data = critic.evaluate("q", ["t1"], {"final_answer": "done"})
+        data = critic.evaluate("q", "t1", {"final_answer": "done"})
         self.assertEqual(data["decision"], "reject")
 
 
