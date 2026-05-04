@@ -40,7 +40,11 @@ async function sendMessage() {
 
         renderMessage('ai', data.reply || '无回复');
         if (data.route) {
-            statusEl.textContent = `[ROUTER] source=${data.route.source || 'unknown'} use_agent=${data.route.use_agent} use_rag=${data.route.use_rag} require_json=${data.route.require_json}`;
+            const mem =
+                typeof data.route.agent_memory_hits === 'number'
+                    ? ` agent_memory_hits=${data.route.agent_memory_hits}`
+                    : '';
+            statusEl.textContent = `[ROUTER] source=${data.route.source || 'unknown'} use_agent=${data.route.use_agent} use_rag=${data.route.use_rag} require_json=${data.route.require_json}${mem}`;
         }
     } catch (err) {
         renderMessage('ai', `请求异常: ${err.message}`);

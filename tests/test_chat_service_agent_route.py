@@ -63,6 +63,10 @@ class DummyLLM:
 
 
 class TestableChatService(ChatService):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("agent_memory_enabled", False)
+        super().__init__(*args, **kwargs)
+
     def _get_llm_client(self):
         return DummyLLM()
 

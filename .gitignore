@@ -14,3 +14,6 @@ dist/
 .idea/
 *.log
 
+# Local agent vector memory (FAISS); generated at runtime
+data/agent_task_memory/
+

@@ -116,6 +116,10 @@ if __name__ == '__main__':
             online_conf=online_conf,
             rag_enabled=rag_enabled,
             routing_mode=routing_mode,
+            agent_memory_enabled=parse_bool(os.getenv("AGENT_MEMORY_ENABLED", "1"), default=True),
+            agent_memory_dir=os.getenv("AGENT_MEMORY_DIR") or None,
+            agent_memory_top_k=int(os.getenv("AGENT_MEMORY_TOP_K", "5")),
+            agent_memory_score_threshold=float(os.getenv("AGENT_MEMORY_SCORE_THRESHOLD", "0.32")),
         )
     except RuntimeError as e:
         print(str(e))

@@ -3,6 +3,8 @@ import json
 import logging
 import time
 import uuid
+from pathlib import Path
+from typing import Optional
 
 from ai_app.agent.executor import AgentExecutor
 from ai_app.agent.plan_executor import PlanExecutor
@@ -34,6 +36,10 @@ class ChatService:
         rag_enabled=True,
         routing_mode="hybrid",
         agent_enabled=True,
+        agent_memory_enabled: bool = True,
+        agent_memory_dir: Optional[str] = None,
+        agent_memory_top_k: int = 5,
+        agent_memory_score_threshold: float = 0.32,
     ):
         self.system_prompt = system_prompt
         self.llm_type = llm_type
@@ -53,6 +59,11 @@ class ChatService:
         self.planner = None
         self.critic = None
         self.plan_executor = None
+        self.agent_memory_enabled = agent_memory_enabled
+        self.agent_memory_dir = agent_memory_dir
+        self.agent_memory_top_k = agent_memory_top_k
+        self.agent_memory_score_threshold = agent_memory_score_threshold
+        self._agent_memory = None
         self.last_route = None
         self.last_router_model = self.router_model
 
@@ -88,6 +99,24 @@ class ChatService:
                 return None
             self.plan_executor = PlanExecutor(planner, agent_executor, critic)
         return self.plan_executor
+
+    def _default_agent_memory_dir(self) -> str:
+        root = Path(__file__).resolve().parents[2]
+        return str(root / "data" / "agent_task_memory")
+
+    def _get_agent_memory(self):
+        if not self.agent_memory_enabled or not self.agent_enabled:
+            return None
+        if self._agent_memory is None:
+            from ai_app.memory.agent_task_memory import AgentTaskMemory
+
+            persist = self.agent_memory_dir or self._default_agent_memory_dir()
+            self._agent_memory = AgentTaskMemory(
+                persist,
+                top_k=self.agent_memory_top_k,
+                score_threshold=self.agent_memory_score_threshold,
+            )
+        return self._agent_memory
 
     def _get_rag_service(self):
         if not self.rag_enabled:
@@ -255,7 +284,35 @@ class ChatService:
             else:
                 try:
                     logger.info("Agent route enabled request_id=%s model=%s", request_id, use_model)
-                    output = plan_executor.run(user_input, use_model)
+                    original_input = user_input
+                    agent_input = original_input
+                    mem = self._get_agent_memory()
+                    if mem:
+                        try:
+                            from ai_app.memory.agent_task_memory import augment_user_input_with_memory_hits
+
+                            hits = mem.search(original_input, top_k=self.agent_memory_top_k)
+                            route["agent_memory_hits"] = len(hits)
+                            if hits:
+                                agent_input = augment_user_input_with_memory_hits(original_input, hits)
+                                logger.info(
+                                    "Agent vector memory request_id=%s hits=%s",
+                                    request_id,
+                                    len(hits),
+                                )
+                        except Exception as exc:
+                            route["agent_memory_hits"] = 0
+                            logger.warning("Agent memory search failed request_id=%s: %s", request_id, exc)
+                    else:
+                        route["agent_memory_hits"] = 0
+
+                    output = plan_executor.run(agent_input, use_model)
+                    if mem:
+                        try:
+                            mem.add_from_agent_run(original_input, output)
+                        except Exception as exc:
+                            logger.warning("Agent memory persist failed request_id=%s: %s", request_id, exc)
+
                     elapsed = time.perf_counter() - start
                     logger.info("Agent done request_id=%s elapsed=%.2fs", request_id, elapsed)
                     return output

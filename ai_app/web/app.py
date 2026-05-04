@@ -25,6 +25,8 @@ def build_chat_service_from_env():
     timeout = int(os.getenv("LLM_TIMEOUT", "60"))
     rag_enabled = parse_bool(os.getenv("RAG_ENABLED", "1"), default=True)
     routing_mode = os.getenv("ROUTING_MODE", "hybrid").strip().lower()
+    agent_memory_enabled = parse_bool(os.getenv("AGENT_MEMORY_ENABLED", "1"), default=True)
+    agent_memory_dir = os.getenv("AGENT_MEMORY_DIR") or None
 
     model_name = None
     router_model = os.getenv("ROUTER_MODEL")
@@ -57,6 +59,10 @@ def build_chat_service_from_env():
         online_conf=online_conf,
         rag_enabled=rag_enabled,
         routing_mode=routing_mode,
+        agent_memory_enabled=agent_memory_enabled,
+        agent_memory_dir=agent_memory_dir,
+        agent_memory_top_k=int(os.getenv("AGENT_MEMORY_TOP_K", "5")),
+        agent_memory_score_threshold=float(os.getenv("AGENT_MEMORY_SCORE_THRESHOLD", "0.32")),
     )
 
 
