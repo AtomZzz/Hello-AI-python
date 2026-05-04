@@ -12,6 +12,9 @@ from ai_app.prompt.templates import build_agent_step_messages
 
 logger = logging.getLogger(__name__)
 
+# 防止单条 Observation 撑爆上下文；仅影响写入 Prompt 的展示，不影响 state 内完整数据。
+_MAX_PROMPT_JSON_CHARS = 8000
+
 
 @dataclass
 class AgentState:
@@ -147,6 +150,42 @@ class AgentExecutor:
         except Exception as exc:
             return {"error": f"工具执行失败: {exc}"}
 
+    @staticmethod
+    def _json_for_prompt(value: Any) -> str:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except TypeError:
+            text = json.dumps(str(value), ensure_ascii=False)
+        if len(text) <= _MAX_PROMPT_JSON_CHARS:
+            return text
+        return text[: _MAX_PROMPT_JSON_CHARS - 24] + "…[内容已截断，完整结果在最终 JSON 的 steps 中]"
+
+    @classmethod
+    def format_short_term_memory(cls, steps: List[Dict[str, Any]]) -> str:
+        """将已执行步骤格式化为 ReAct 风格短期记忆，供下一步 LLM 在 Prompt 中读取。"""
+        if not steps:
+            return ""
+        blocks: List[str] = []
+        for idx, step in enumerate(steps, start=1):
+            thought = str(step.get("thought") or "").strip()
+            action = str(step.get("action") or "").strip()
+            action_input = step.get("input") if isinstance(step.get("input"), dict) else cls._normalize_action_input(
+                step.get("input")
+            )
+            observation = step.get("observation")
+            blocks.append(
+                "\n".join(
+                    [
+                        f"### Step {idx}",
+                        f"Thought: {thought}",
+                        f"Action: {action}",
+                        f"Action Input: {cls._json_for_prompt(action_input)}",
+                        f"Observation: {cls._json_for_prompt(observation)}",
+                    ]
+                )
+            )
+        return "\n\n".join(blocks).strip()
+
     def _parse_step_json(self, llm_output: str) -> Dict[str, Any]:
         parsed = self.step_parser.parse(llm_output or "")
         if parsed:
@@ -186,7 +225,6 @@ class AgentExecutor:
     def run(self, user_input, model=None):
         use_model = model or self.model
         state = AgentState(max_iterations=self.max_steps)
-        scratchpad = ""
         analysis = {}
         summary = {}
         final_answer_text = ""
@@ -196,12 +234,13 @@ class AgentExecutor:
             if state.iteration > state.max_iterations:
                 break
 
+            short_term_memory = self.format_short_term_memory(state.steps)
             try:
                 llm_output = self.llm_client.generate(
                     build_agent_step_messages(
                         user_input,
                         tool_specs=self.list_tool_specs(),
-                        scratchpad=scratchpad,
+                        scratchpad=short_term_memory,
                     ),
                     use_model,
                 )
@@ -263,11 +302,6 @@ class AgentExecutor:
                 analysis = self._extract_analysis(tool_result)
             if action == "summarize_text" and isinstance(tool_result, dict) and "error" not in tool_result:
                 summary = self._extract_summary(tool_result)
-
-            scratchpad += (
-                f"\nStepJSON: {json.dumps(parsed, ensure_ascii=False)}\n"
-                f"Observation: {json.dumps(observation, ensure_ascii=False)}\n"
-            )
 
         if not analysis:
             analysis_result = self.safe_tool_call("analyze_log", {"text": user_input})

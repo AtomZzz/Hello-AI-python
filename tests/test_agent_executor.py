@@ -29,6 +29,23 @@ class LoopLLM:
         )
 
 
+class RecordingLLM:
+    """记录每次 generate 收到的 messages，用于断言短期记忆是否进入 Prompt。"""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.idx = 0
+        self.messages_log = []
+
+    def generate(self, messages, model):
+        self.messages_log.append(messages)
+        if self.idx >= len(self.responses):
+            return self.responses[-1]
+        value = self.responses[self.idx]
+        self.idx += 1
+        return value
+
+
 class AgentExecutorTest(unittest.TestCase):
     def test_can_handle_log_request(self):
         executor = AgentExecutor(SequenceLLM(["{}"]), "fake-model")
@@ -79,6 +96,40 @@ class AgentExecutorTest(unittest.TestCase):
         self.assertEqual(first_step["observation"]["type"], "analysis_result")
         self.assertEqual(data["steps"][1]["action"], "summarize_text")
         self.assertEqual(data["steps"][1]["observation"]["type"], "summary_result")
+
+    def test_short_term_memory_appears_in_prompt_after_first_step(self):
+        """第二步调用 LLM 时，用户消息中应包含 Step 1 及实际执行的 Action Input / Observation。"""
+        llm = RecordingLLM(
+            [
+                json.dumps(
+                    {
+                        "thought": "先做日志分析",
+                        "action": "analyze_log",
+                        "action_input": {"text": "用户误以为要传这行"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "thought": "应引用上一步分析结果",
+                        "action": "final_answer",
+                        "action_input": {"answer": "见上一步"},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        executor = AgentExecutor(llm, "fake-model")
+        executor.run("line-1 ERROR timeout\nline-2 ERROR refused", model="fake-model")
+
+        self.assertGreaterEqual(len(llm.messages_log), 2)
+        second_user_content = llm.messages_log[1][0]["content"]
+        self.assertIn("短期记忆", second_user_content)
+        self.assertIn("### Step 1", second_user_content)
+        self.assertIn("analyze_log", second_user_content)
+        # guardrail：实际执行使用整段 user_input，应出现在短期记忆中而非仅 LLM 的 action_input
+        self.assertIn("line-1 ERROR timeout", second_user_content)
+        self.assertIn("analysis_result", second_user_content)
 
     def test_safe_tool_call_blocks_unknown_tool(self):
         llm = SequenceLLM(

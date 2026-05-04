@@ -86,7 +86,10 @@ def build_agent_prompt(user_input, tool_specs=None, scratchpad=""):
     tools_section = "\n".join(tool_specs)
     scratchpad = (scratchpad or "").strip()
     scratchpad_section = (
-        f"\n\n以下是你之前的推理与工具执行记录，请基于它继续：\n{scratchpad}\n"
+        f"\n\n## 短期记忆（已执行步骤，按时间顺序）\n"
+        f"以下 Thought / Action / Observation 为真实历史，下一轮必须在此基础上推理；"
+        f"需要延续结论时请显式引用先前 Observation 中的事实或字段名，不要与之矛盾。\n\n"
+        f"{scratchpad}\n"
         if scratchpad
         else ""
     )
@@ -110,7 +113,7 @@ def build_agent_prompt(user_input, tool_specs=None, scratchpad=""):
 
 注意：
 1. 不要伪造 Observation，Observation 由系统返回。
-2. 优先使用工具结果进行结论。
+2. 优先使用工具结果进行结论；若短期记忆中已有相关 Observation，应直接引用其中的数据再继续。
 3. 当 Observation.type=analysis_result 时，如需总结请调用 summarize_text，输入应基于 analysis_result.data。
 
 用户问题：
